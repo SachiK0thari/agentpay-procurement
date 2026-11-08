@@ -1,0 +1,18 @@
+[project]
+name = "agentpay"
+version = "0.1.0"
+description = "A B2B procurement agent with payments-grade guardrails on Stripe Issuing"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+stripe = ["stripe>=10"]
+llm = ["anthropic"]
+server = ["fastapi", "uvicorn", "httpx", "stripe>=10"]
+dev = ["pytest", "httpx", "fastapi", "stripe>=10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools]
+packages = ["agentpay"]
