@@ -9,9 +9,15 @@ from __future__ import annotations
 
 from typing import Optional, Protocol
 
+from .config import redact
+
 
 class TransientStripeError(Exception):
     """Retryable: network error, 5xx, rate limit, or a lost response."""
+
+
+class PermanentStripeError(Exception):
+    """Not retryable: 4xx (bad key, unknown cardholder, invalid request). Retrying can't help."""
 
 
 class StripeGateway(Protocol):
@@ -37,9 +43,13 @@ class FakeStripe:
         self.fail_next = 0           # raise before doing anything
         self.lose_next_response = 0  # do the work, then raise (response lost in transit)
         self.cancel_fail_next = 0    # cancel_card raises (card stays active)
+        self.reject_next = 0         # create_card raises a 4xx (e.g. invalid API key)
 
     def create_card(self, *, intent_id, amount, currency, mcc, idempotency_key) -> str:
         self.calls.append(("create_card", idempotency_key))
+        if self.reject_next:
+            self.reject_next -= 1
+            raise PermanentStripeError("simulated 401: invalid API key")
         if self.fail_next:
             self.fail_next -= 1
             raise TransientStripeError("simulated 500")
@@ -87,7 +97,9 @@ class FakeStripe:
 class LiveStripe:
     """Stripe Issuing, single-use virtual cards. Use a restricted test-mode key."""
 
-    def __init__(self, api_key: str, cardholder_id: str):
+    def __init__(self, api_key: str, cardholder_id: str, financial_account: Optional[str] = None):
+        """`financial_account` (fa_...): required on accounts using Stripe's v2 money management,
+        where Card.create fails with "You need a financial account" unless the card names one."""
         import stripe  # optional dependency
 
         if not api_key.startswith(("sk_test_", "rk_test_")):
@@ -95,6 +107,7 @@ class LiveStripe:
         stripe.api_key = api_key
         self._stripe = stripe
         self.cardholder_id = cardholder_id
+        self.financial_account = financial_account
 
     def create_card(self, *, intent_id, amount, currency, mcc, idempotency_key) -> str:
         with self._translate_errors():
@@ -109,6 +122,7 @@ class LiveStripe:
                 },
                 metadata={"intent_id": intent_id},
                 idempotency_key=idempotency_key,
+                **({"financial_account_v2": self.financial_account} if self.financial_account else {}),
             )
         return card.id
 
@@ -121,8 +135,9 @@ class LiveStripe:
 
 
 class _ErrorTranslator:
-    """Context manager: network errors, rate limits and 5xx become TransientStripeError.
-    4xx (bad request, auth, card errors) propagate unchanged — retrying them can't help."""
+    """Context manager: network errors, rate limits and 5xx become TransientStripeError;
+    every other Stripe error (4xx: bad request, auth, card errors) becomes PermanentStripeError,
+    so callers can fail the intent and release its budget instead of leaving it stuck."""
 
     def __init__(self, stripe_mod):
         self.s = stripe_mod
@@ -135,7 +150,10 @@ class _ErrorTranslator:
             return False
         s = self.s
         if isinstance(exc, (s.APIConnectionError, s.RateLimitError)):
-            raise TransientStripeError(str(exc)) from exc
+            raise TransientStripeError(redact(str(exc))) from exc
         if isinstance(exc, s.APIError) and (getattr(exc, "http_status", None) or 500) >= 500:
-            raise TransientStripeError(f"stripe {exc.http_status}: {exc}") from exc
+            raise TransientStripeError(redact(f"stripe {exc.http_status}: {exc}")) from exc
+        if isinstance(exc, s.StripeError):
+            raise PermanentStripeError(redact(f"stripe {getattr(exc, 'http_status', '?')}: "
+                                              f"{getattr(exc, 'user_message', None) or exc}")) from exc
         return False

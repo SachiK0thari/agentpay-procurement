@@ -2,7 +2,8 @@
 
 Run:   uvicorn agentpay.app:app --reload
 Forward test-mode webhooks:
-       stripe listen --forward-to localhost:8000/webhooks/stripe
+       stripe listen --events issuing_authorization.request,issuing_authorization.created,issuing_transaction.created \
+         --forward-to localhost:8000/webhooks/stripe
 
 Endpoints
   POST /webhooks/stripe              signed Stripe events; real-time auth decision in the body
@@ -29,15 +30,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .approvals import ApprovalSigner, InvalidApproval
-from .config import load_dotenv
+from .config import RedactingFilter, load_dotenv
 from .auth import COOKIE_NAME, Authenticator, SessionAuth, Unauthenticated
 from .executor import Executor
 from .models import PurchaseIntent
 from .policy import PolicyConfig
 from .risk import RiskConfig
 from .service import ProcurementService
-from .store import Store
-from .stripe_gateway import LiveStripe, TransientStripeError
+from .store import Store, period_for
+from .stripe_gateway import LiveStripe, PermanentStripeError, TransientStripeError
 from .webhooks import InvalidSignature, WebhookHandler
 
 log = logging.getLogger("agentpay")
@@ -104,6 +105,8 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
             r = service.submit(intent)
         except TransientStripeError as e:
             raise HTTPException(503, f"stripe unavailable: {e}")
+        except PermanentStripeError as e:
+            raise HTTPException(502, f"stripe rejected the request (intent failed, budget released): {e}")
         return {"intent_id": r.intent_id, "state": r.state.value, "reasons": r.reasons,
                 "approval_url": f"{base_url}/approvals/{r.approval_token}" if r.approval_token else None}
 
@@ -142,6 +145,8 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
             raise HTTPException(403, str(e))
         except TransientStripeError as e:
             raise HTTPException(503, f"stripe unavailable: {e}")
+        except PermanentStripeError as e:
+            raise HTTPException(502, f"stripe rejected the request (intent failed, budget released): {e}")
         return {"intent_id": r.intent_id, "state": r.state.value, "decided_by": user}
 
     # ---------- ops ----------
@@ -208,12 +213,34 @@ document.querySelectorAll('button').forEach(b=>b.disabled=true);}}
 
 
 # ---------------------------------------------------------------- env wiring
+def seed_budgets(store: Store, spec: str, now: float) -> None:
+    """`BUDGETS=it=500000;eng=200000` (monthly limits in cents) -> rows for this month and next.
+
+    Without a row, reserve() matches nothing and every order is rejected `budget_exhausted`.
+    Next month is seeded too so a server left running across the month boundary keeps working.
+    Upserts the limit only; reserved/spent amounts already recorded are left alone.
+    """
+    nxt = time.gmtime(now)
+    next_month = f"{nxt.tm_year + (nxt.tm_mon == 12)}-{nxt.tm_mon % 12 + 1:02d}"
+    for pair in filter(None, (p.strip() for p in spec.split(";"))):
+        team, limit = pair.split("=")
+        for period in (period_for(now), next_month):
+            store.set_budget(team.strip(), period, int(limit))
+
+
 def app_from_env() -> FastAPI:
     import stripe  # server extra
 
     load_dotenv(os.environ.get("AGENTPAY_ENV_FILE", ".env"))
+    # Access lines contain approval tokens in the path; server errors can quote Stripe keys.
+    # (The "APPROVAL NEEDED" line on the agentpay logger is the dev stand-in for emailing the
+    # approver, so it deliberately keeps its link.)
+    for name in ("uvicorn.access", "uvicorn.error"):
+        logging.getLogger(name).addFilter(RedactingFilter())
     store = Store(os.environ.get("AGENTPAY_DB", "agentpay.db"))
-    gateway = LiveStripe(os.environ["STRIPE_SECRET_KEY"], os.environ["STRIPE_CARDHOLDER_ID"])
+    seed_budgets(store, os.environ.get("BUDGETS", "it=500000"), time.time())
+    gateway = LiveStripe(os.environ["STRIPE_SECRET_KEY"], os.environ["STRIPE_CARDHOLDER_ID"],
+                         financial_account=os.environ.get("STRIPE_FINANCIAL_ACCOUNT") or None)
     session = SessionAuth(os.environ["SESSION_SECRET"].encode())
     base_url = os.environ.get("BASE_URL", "http://localhost:8000")
     vendors = {v: set(m.split("|")) for v, m in

@@ -5,7 +5,7 @@ Prerequisites (all test mode):
   export STRIPE_SECRET_KEY=sk_test_... STRIPE_CARDHOLDER_ID=ich_... STRIPE_WEBHOOK_SECRET=whsec_... \
          APPROVAL_SECRET=... SESSION_SECRET=... AGENTPAY_DEV_LOGIN=1
   uvicorn agentpay.app:app                                  # terminal 1
-  stripe listen --forward-to localhost:8000/webhooks/stripe # terminal 2 (prints the whsec_)
+  stripe listen --events issuing_authorization.request,issuing_authorization.created,issuing_transaction.created --forward-to localhost:8000/webhooks/stripe # terminal 2 (prints the whsec_)
   python scripts/testmode_demo.py [--amount 2000] [--merchant "DELL TECHNOLOGIES"] [--inflate]
 
 What it does
@@ -34,7 +34,7 @@ import httpx
 import stripe
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
-from agentpay.config import load_dotenv  # noqa: E402
+from agentpay.config import load_dotenv, redact  # noqa: E402
 
 load_dotenv(os.environ.get("AGENTPAY_ENV_FILE", ".env"))
 BASE = os.environ.get("BASE_URL", "http://localhost:8000")
@@ -119,4 +119,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except httpx.HTTPStatusError as e:   # its default message includes the URL (approval tokens)
+        sys.exit(redact(f"server returned {e.response.status_code} for {e.request.method} "
+                        f"{e.request.url.path}: {e.response.text[:500]}"))
+    except stripe.StripeError as e:
+        sys.exit(redact(f"stripe error: {e.user_message or e}"))

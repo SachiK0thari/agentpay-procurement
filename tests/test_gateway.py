@@ -4,7 +4,7 @@ import pytest
 stripe = pytest.importorskip("stripe")  # `pip install -e ".[dev]"`
 
 from agentpay.models import State
-from agentpay.stripe_gateway import LiveStripe, TransientStripeError
+from agentpay.stripe_gateway import LiveStripe, PermanentStripeError, TransientStripeError
 
 from agentpay.testing import World, make_intent
 
@@ -71,6 +71,7 @@ def _live(exc):
     g._stripe.APIConnectionError = stripe.APIConnectionError
     g._stripe.RateLimitError = stripe.RateLimitError
     g._stripe.APIError = stripe.APIError
+    g._stripe.StripeError = stripe.StripeError
     g._stripe.issuing = type("I", (), {})()
     g._stripe.issuing.Card = _Boom(exc)
     return g
@@ -101,11 +102,32 @@ def test_transient_errors_become_transient(exc):
     stripe.AuthenticationError("bad key", http_status=401),
     stripe.PermissionError("restricted key", http_status=403),
 ])
-def test_client_errors_propagate_unchanged(exc):
-    with pytest.raises(type(exc)):
+def test_client_errors_become_permanent(exc):
+    """Not retried, but translated so the executor can fail the intent and release its budget."""
+    with pytest.raises(PermanentStripeError) as info:
         _create(_live(exc))
+    assert isinstance(info.value.__cause__, type(exc))   # original Stripe error kept for logs
 
 
 def test_live_stripe_refuses_live_keys():
     with pytest.raises(ValueError):
         LiveStripe("sk_live_abc", "ich_x")
+
+
+
+class _Recorder:
+    def __init__(self):
+        self.kwargs = None
+
+    def create(self, **kw):
+        self.kwargs = kw
+        return type("C", (), {"id": "ic_x"})()
+
+
+@pytest.mark.parametrize("fa", [None, "fa_test_123"])
+def test_financial_account_sent_only_when_configured(fa):
+    g = _live(RuntimeError("unused"))
+    g._stripe.issuing.Card = rec = _Recorder()
+    g.financial_account = fa
+    g.create_card(intent_id="int_1", amount=100, currency="usd", mcc="m", idempotency_key="k")
+    assert rec.kwargs.get("financial_account_v2") == fa

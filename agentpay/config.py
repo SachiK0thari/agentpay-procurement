@@ -8,6 +8,7 @@ through its platform is unaffected by a stray file.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 
@@ -35,3 +36,33 @@ def load_dotenv(path: str | os.PathLike = ".env", *, override: bool = False) -> 
         os.environ[key] = value
         loaded[key] = value
     return loaded
+
+
+# Stripe keys / webhook secrets, and approval tokens (`<intent>.<approver>.<nonce>.<exp>.<hmac>`).
+_SECRET_RE = re.compile(r"\b((?:sk|rk|pk)_(?:test|live)_|whsec_)[A-Za-z0-9*]+")
+_TOKEN_RE = re.compile(r"(/approvals/)[^/\s\"']+")
+
+
+def redact(text: str) -> str:
+    """Mask credentials before text reaches a log line, an HTTP error body, or a terminal."""
+    return _TOKEN_RE.sub(r"\1<token>", _SECRET_RE.sub(r"\1****", str(text)))
+
+
+class RedactingFilter:
+    """logging filter: applies redact() to the message, its args, and any traceback."""
+
+    def filter(self, record) -> bool:
+        if isinstance(record.args, tuple) and record.args:
+            # Redact each arg in place: uvicorn's AccessFormatter unpacks record.args by position.
+            record.msg = redact(record.msg)
+            record.args = tuple(redact(a) if isinstance(a, str) else a for a in record.args)
+        else:
+            msg = record.getMessage()
+            clean = redact(msg)
+            if clean != msg:
+                record.msg, record.args = clean, None
+        if record.exc_info:  # tracebacks carry exception messages too (e.g. Stripe auth errors)
+            import traceback
+            record.exc_text = redact("".join(traceback.format_exception(*record.exc_info)).rstrip())
+            record.exc_info = None
+        return True

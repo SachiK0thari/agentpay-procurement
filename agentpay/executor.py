@@ -12,7 +12,7 @@ from typing import Callable, Optional
 
 from .models import State
 from .store import Store
-from .stripe_gateway import StripeGateway, TransientStripeError
+from .stripe_gateway import PermanentStripeError, StripeGateway, TransientStripeError
 
 
 class NotApproved(Exception):
@@ -46,6 +46,11 @@ class Executor:
                 break
             except TransientStripeError:
                 self.sleep(min(0.2 * 2 ** attempt, 2.0))
+            except PermanentStripeError:
+                # Fail closed and give the budget back; nothing will ever retry this intent.
+                self.store.transition(intent_id, State.FAILED, ["stripe_rejected"])
+                self.store.release(intent_id)
+                raise
         else:
             self.store.transition(intent_id, State.FAILED, ["stripe_unavailable"])
             self.store.release(intent_id)
