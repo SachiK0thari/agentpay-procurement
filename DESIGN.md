@@ -1,8 +1,9 @@
 # Design: safe agentic procurement on Stripe Issuing
 
-Status: weeks 1–2 built and tested against fakes; week-3 eval growth done (74 scenarios).
-Outstanding: one real Stripe test-mode purchase (needs credentials; driver is
-`scripts/testmode_demo.py`), live-planner eval run (needs an Anthropic key), demo video.
+Status: weeks 1–2 built and tested against fakes; week-3 eval growth done (75 scenarios).
+Outstanding: one real Stripe test-mode purchase (blocked: Issuing needs Stripe sales approval on
+this account; driver is `scripts/testmode_demo.py`), live-planner eval run (needs an Anthropic
+key), demo video (script ready: `scripts/local_demo.py --pause`).
 
 ## 1. Problem
 
@@ -87,26 +88,39 @@ Done this iteration:
       spending limit, so the `card_controls_only` eval group tests that layer in isolation.
 - [x] Planner tool loop (`search_catalog`, `get_budget`, `fetch_product_page`) with a
       `PlanTrace` (tokens, latency, cost) per run and an optional log callback.
-- [x] 5xx `stripe.APIError` (and errors with no status) → `TransientStripeError`; 4xx propagate.
+- [x] 5xx `stripe.APIError` (and errors with no status) → `TransientStripeError`; other Stripe errors
+      (4xx: bad key, unknown cardholder) → `PermanentStripeError`: the executor fails the intent and
+      releases its budget instead of leaving it `APPROVED` holding funds (found in the test-mode run).
+- [x] Merchant check was a substring match, so "TOTALLY NOT FIGMA LLC" passed for Figma. Now the
+      descriptor must start with the vendor's name as whole words (`merchant_matches`); eval
+      `adv-lookalike-merchant-contains-vendor`. Processor prefixes ("SQ *FIGMA") now false-block.
+- [x] Server seeds team budgets on startup (`BUDGETS`, default `it=500000`); before, every live
+      order was rejected `budget_exhausted`. Stripe keys and approval tokens are redacted from
+      server logs, error bodies and demo output (`config.redact`).
+- [x] `STRIPE_FINANCIAL_ACCOUNT` → `financial_account_v2` on card creation, required on accounts
+      using Stripe's v2 money management.
 - [x] Approval endpoints take the approver from an authenticated session (`SessionAuth`, cookie or
       bearer). Swap in an OIDC/JWT verifier for SSO; the endpoints don't change.
 - [x] Real-time authorization contract confirmed against Stripe docs (Oct 2026): decision in the
       webhook response body, `Stripe-Version` header required, amount from `pending_request`.
-- [x] Evals grown to 74 scenarios in 7 groups, including planner runs with injected pages, with
+- [x] Evals grown to 75 scenarios in 7 groups, including planner runs with injected pages, with
       layer attribution and token/latency/cost columns.
 
 Still open:
 
-- [ ] Run `scripts/testmode_demo.py` against Stripe test mode (needs `sk_test_` key, cardholder,
-      `stripe listen`). Also confirm the test helpers deliver `issuing_authorization.request` to
-      the forwarded endpoint on your account.
+- [ ] **Blocked on Stripe:** run `scripts/testmode_demo.py` against Stripe test mode. Tried
+      2026-11-14 on a main account and a sandbox: the server, auth, budget, approval and Stripe
+      calls work, but Issuing requires Stripe sales approval for this account, so the financial
+      account stays `pending` and Stripe refuses card creation. Re-run once Issuing is enabled;
+      also confirm the test helpers deliver `issuing_authorization.request` to `stripe listen`.
+      Meanwhile `scripts/local_demo.py` shows the same flow against FakeStripe.
 - [ ] Run `python evals/run_evals.py --live-planner` with a real key and record the planner row in
       the README (today's row is from the scripted model).
 - [ ] Replace `SessionAuth` with the organisation's IdP verifier.
 - [ ] `assign_provenance` is a word/number match; a request like "the usual 3 plus 2 spares" would
       mark 5 as untrusted (safe side) and "order 3 of SKU 50" would accept 50 (unsafe side —
       a bare number in the request is enough). Tighten with a structured request form.
-- [ ] Demo video and write-up.
+- [ ] Demo video and write-up. Record `python scripts/local_demo.py --pause`.
 
 ## 7. Build plan
 
@@ -114,9 +128,9 @@ Still open:
 | --- | --- | --- |
 | 1 | ✅ Data model, state machine, policy, store, executor, webhooks, tests | `pytest` green |
 | 1 | ✅ Eval harness with 21 scenarios | `run_evals.py` reports 0 unsafe |
-| 2 | ✅ Card sweeper; Claude planner with read-only tool loop; ◻ Stripe test-mode run | One real test-mode purchase end-to-end (`scripts/testmode_demo.py`, needs credentials) |
+| 2 | ✅ Card sweeper; Claude planner with read-only tool loop; ⛔ Stripe test-mode run (blocked: Issuing needs Stripe sales approval, see §6) | One real test-mode purchase end-to-end (`scripts/testmode_demo.py`, needs Issuing enabled) |
 | 2 | ✅ Web approval UI | Approver opens the link signed in, clicks Approve, the card is issued |
-| 3 | ✅ 74 scenarios incl. planner + injected pages; cost/latency columns | Eval table in README (`--markdown`) |
+| 3 | ✅ 75 scenarios incl. planner + injected pages; cost/latency columns | Eval table in README (`--markdown`) |
 | 3 | ◻ 2–3 min demo video; write-up | Happy path, approval, blocked injection on screen |
 
 ## 8. Production would add
