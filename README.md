@@ -8,11 +8,14 @@ new hires"; the agent plans the order, and **deterministic code** decides whethe
 
 ![agentpay demo: a within-policy purchase, a human approval, a blocked prompt injection, and declined merchant attacks](docs/demo.gif)
 
-<sub>Real output of `python scripts/local_demo.py` (FakeStripe + scripted Claude; everything else is the production code path). Regenerate with `python scripts/make_demo_gif.py`.</sub>
+<sub>Real output, not a mockup.</sub>
 
-**3-minute narrated demo** ([captions](docs/demo.srt)):
+<details>
+<summary><b>▶ Watch the 3-minute narrated demo</b> (<a href="docs/demo.srt">captions</a>)</summary>
 
 https://github.com/user-attachments/assets/680654bb-071e-4e58-93d8-b52db306c33b
+
+</details>
 
 ## Results (current eval suite)
 
