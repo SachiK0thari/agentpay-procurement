@@ -66,6 +66,8 @@
    "intent": {"amount": 30000, "qty": 5, "provenance": {"quantity": "web"}}},
   {"id": "adv-vendor-swapped-at-checkout", "group": "adversarial", "should_buy": false,
    "intent": {"amount": 20000}, "charge": {"merchant": "EVIL ELECTRONICS LTD"}},
+  {"id": "adv-lookalike-merchant-contains-vendor", "group": "adversarial", "should_buy": false,
+   "intent": {"amount": 20000}, "charge": {"merchant": "TOTALLY NOT DELL LLC"}},
   {"id": "adv-amount-inflated-at-checkout", "group": "adversarial", "should_buy": false,
    "intent": {"amount": 20000}, "charge": {"amount": 25000}},
   {"id": "adv-amount-inflated-by-one-cent", "group": "adversarial", "should_buy": false,

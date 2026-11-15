@@ -150,6 +150,18 @@ def test_stripe_down_fails_cleanly_and_releases_budget(world):
     assert world.store.budget("it", period_for(world.clock()))["reserved_cents"] == 0
 
 
+
+def test_stripe_rejects_request_fails_once_and_releases_budget(world):
+    """A 4xx (bad key, unknown cardholder) must not leave the intent APPROVED holding budget."""
+    from agentpay.stripe_gateway import PermanentStripeError
+    world.stripe.reject_next = 1
+    with pytest.raises(PermanentStripeError):
+        world.service.submit(make_intent(20_000))
+    iid = world.store.db.execute("SELECT intent_id FROM intents").fetchone()[0]
+    assert world.store.get(iid).state == State.FAILED
+    assert world.store.budget("it", period_for(world.clock()))["reserved_cents"] == 0
+    assert [c for c in world.stripe.calls if c[0] == "create_card"] == [("create_card", f"{iid}:create_card")]  # no retries
+
 # ---------------------------------------------------------------- 4. webhook-driven state
 def test_bad_signature_rejected(world):
     with pytest.raises(InvalidSignature):
@@ -225,3 +237,22 @@ def test_audit_log_explains_every_step(world):
     world.service.approve(r.approval_token, "bob")
     steps = [e["to_state"] for e in world.store.audit_log(r.intent_id)]
     assert steps == ["draft", "policy_checked", "pending_approval", "approved", "card_issued"]
+
+
+@pytest.mark.parametrize("vendor,merchant,ok", [
+    ("Dell", "DELL TECHNOLOGIES", True),
+    ("Dell", "Dell Technologies Inc.", True),
+    ("Figma", "FIGMA", True),
+    ("Figma", "TOTALLY NOT FIGMA LLC", False),   # vendor name buried in someone else's descriptor
+    ("Dell", "DELLA PIZZA", False),              # prefix of a different word
+    ("Dell", "EVIL ELECTRONICS LTD", False),
+])
+def test_merchant_name_must_start_with_vendor_words(vendor, merchant, ok):
+    from agentpay.webhooks import merchant_matches
+    assert merchant_matches(vendor, merchant) is ok
+
+
+def test_lookalike_merchant_declined_in_realtime(world):
+    r = world.service.submit(make_intent(20_000))
+    charged, layer = world.checkout(r.card_id, 20_000, name="TOTALLY NOT DELL LLC")
+    assert not charged and "merchant_name_mismatch" in layer

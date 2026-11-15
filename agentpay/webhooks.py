@@ -56,8 +56,19 @@ def verify_signature(payload: bytes, header: str, secret: str, now: float, toler
         raise InvalidSignature("signature mismatch")
 
 
-def _norm(s: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", s.lower())
+def _words(s: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", s.lower())
+
+
+def merchant_matches(vendor: str, merchant_name: str) -> bool:
+    """The descriptor must START with the vendor's name, as whole words.
+
+    "DELL TECHNOLOGIES" / "Dell Technologies Inc." match Dell; "TOTALLY NOT FIGMA LLC" (vendor
+    name inside someone else's descriptor) and "DELLA PIZZA" (prefix of a different word) don't.
+    Processor prefixes such as "SQ *FIGMA" are declined too: a false block, the safe side.
+    """
+    v, m = _words(vendor), _words(merchant_name)
+    return bool(v) and m[:len(v)] == v
 
 
 def requested_amount(auth: dict) -> tuple[int, str]:
@@ -117,7 +128,7 @@ class WebhookHandler:
         m = auth["merchant_data"]
         if m["category"] != rec.intent.mcc:
             reasons.append("mcc_mismatch")
-        if _norm(rec.intent.vendor) not in _norm(m["name"]):
+        if not merchant_matches(rec.intent.vendor, m["name"]):
             reasons.append("merchant_name_mismatch")
         return (not reasons), reasons
 
