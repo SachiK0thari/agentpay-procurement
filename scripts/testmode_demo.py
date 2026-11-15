@@ -99,8 +99,12 @@ def main() -> int:
         print(f"authorization {auth.id}: approved={auth.approved} status={auth.status} "
               f"reason={auth.request_history[-1].reason if auth.request_history else '?'}")
         if not auth.approved:
-            print("declined by our real-time check (see server log for reasons); card stays CARD_ISSUED "
-                  "until the sweeper cancels it")
+            reason = auth.request_history[-1].reason if auth.request_history else None
+            # `webhook_declined` = our real-time check said no; anything else (e.g.
+            # `authorization_controls` = the card's spending limit / categories) is Stripe's own layer.
+            layer = ("our real-time check (see server log for reasons)" if reason == "webhook_declined"
+                     else f"Stripe card controls ({reason}) before our webhook was asked")
+            print(f"declined by {layer}; card stays CARD_ISSUED until the sweeper cancels it")
             return 0
 
         txn = stripe.issuing.Authorization.TestHelpers.capture(auth.id, capture_amount=ask)

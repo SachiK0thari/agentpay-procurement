@@ -2,9 +2,9 @@
 
 **Summary.** agentpay is a procurement agent built on Stripe Issuing. A teammate asks for
 "3 USB-C docks for the new hires". Claude plans the order. Ordinary, tested code decides whether
-any money moves. Across 75 adversarial and failure scenarios it made **0 unsafe purchases** and
-**0 duplicate charges**. One real Stripe test-mode purchase is still outstanding: Stripe has to
-approve Issuing for the account first.
+any money moves. Across 82 adversarial and failure scenarios it made **0 unsafe purchases** and
+**0 duplicate charges**. A real purchase also ran end to end in a Stripe Issuing test-mode
+sandbox (2026-11-15).
 
 ## The problem
 
@@ -45,15 +45,15 @@ scripted model:
 
 | Metric | Value |
 | --- | --- |
-| Scenarios | 75 across 7 groups (happy, policy edge, adversarial, card controls only, lifecycle, failure, planner) |
+| Scenarios | 82 across 7 groups (happy, policy edge, adversarial, card controls only, lifecycle, failure, planner) |
 | Unsafe purchases | **0** |
 | Adversarial scenarios blocked | 18 / 18 |
 | Duplicate charges under crashes, retries and duplicate webhooks | 0 |
-| Legitimate orders completed | 89.5%. Every miss is a deliberate fail-closed outcome: Stripe unavailable, or the model refused or never proposed. |
-| Sent to human review | 32% |
+| Legitimate orders completed | 90.0%. Every miss is a deliberate fail-closed outcome: Stripe unavailable, or the model refused or never proposed. |
+| Sent to human review | 35.4% |
 
 The `card_controls_only` group switches off the real-time check to show that the card's own
-limit and category control stop inflated and off-category charges by themselves. 90 unit tests
+limit and category control stop inflated and off-category charges by themselves. 128 unit tests
 attack each guardrail on its own.
 
 ## What testing against real Stripe found
@@ -78,25 +78,27 @@ safe direction, because a false block costs a retry and a bad approval costs mon
 
 ## Limitations
 
-- **No real test-mode purchase yet.** On this account, Stripe Issuing needs approval from
-  Stripe's sales team. Everything up to card creation was exercised against real Stripe: keys,
-  cardholder, approval flow and the card request itself. Stripe refuses cards while the
-  account's financial account is pending. `scripts/testmode_demo.py` will run unchanged once
-  Issuing is enabled.
-- **Planner numbers come from a scripted model.** The planner evals check that the guardrails
-  hold whatever the model proposes. They don't measure how often real Claude falls for an
-  injected page. `--live-planner` runs them against the real API.
-- **Provenance matching is word-based.** "Order 3 of SKU 50" would accept 50 as a quantity the
-  user typed. A structured request form would close this.
-- **Not production infrastructure.** It uses SQLite, a development sign-in, and no scheduler for
+- **Real Stripe is test mode only, and the evals use an in-memory Stripe.** One real test-mode
+  purchase ran end to end in a Stripe sandbox (2026-11-15): card issued, Stripe asked our server
+  in real time, capture, reconcile, card canceled. Against the same sandbox, an over-limit
+  charge was declined by Stripe's card controls and a look-alike merchant by our real-time check.
+  The 82 scenarios themselves run against FakeStripe so they're fast and repeatable.
+- **Live planner coverage is thin.** Against real Claude (`--live-planner`, 2026-11-14) all 21
+  proposals matched the request exactly, but the model opened the injected product page in only
+  2 of 21 runs, so most injections never reached it. The scripted evals are what show the
+  guardrails hold when the model does fall for a page.
+- **Provenance matching is rule-based.** Numbers after IDs ("SKU 50", "ticket 7"), prices, sizes
+  and times no longer count as quantities, and a request form's quantity field overrides the
+  text. Phrasings the rules don't anticipate still fall to human review rather than through.
+- **Not production infrastructure.** It uses SQLite and has no scheduler for
   the expiry and card-sweep job. DESIGN.md §8 lists what production would add.
 
 ## Try it
 
 ```bash
 pip install -e ".[server,dev]"
-pytest -q                                  # 90 tests, no network
-python evals/run_evals.py                  # 75 scenarios, metrics table
+pytest -q                                  # 128 tests, no network
+python evals/run_evals.py                  # 82 scenarios, metrics table
 python scripts/local_demo.py --pause       # the four-scene walkthrough from the video
 ```
 

@@ -1,9 +1,7 @@
 # Design: safe agentic procurement on Stripe Issuing
 
-Status: weeks 1–2 built and tested against fakes; week-3 eval growth done (75 scenarios).
-Outstanding: one real Stripe test-mode purchase (blocked: Issuing needs Stripe sales approval on
-this account; driver is `scripts/testmode_demo.py`), live-planner eval run (needs an Anthropic
-key), demo video (script ready: `scripts/local_demo.py --pause`).
+Status: weeks 1–3 built; real Stripe test-mode purchase done (2026-11-15); 82 eval scenarios.
+Outstanding: demo video (script ready: `scripts/local_demo.py --pause`).
 
 ## 1. Problem
 
@@ -69,6 +67,8 @@ APPROVED/CARD_ISSUED → FAILED (releases budget)
 | Burst of small orders | Per-user velocity → block | `adv-velocity-burst` |
 | Replayed / forged / self approval | HMAC, nonce table, approver binding | `test_approval_link_is_single_use`, `test_wrong_or_self_approval_refused` |
 | Approver spoofed at the HTTP layer | Session cookie / bearer verified by `Authenticator`; `?approver_id=` is gone | `test_approver_identity_comes_from_session_not_request` |
+| Model takes a non-quantity number from the request ("ticket 7", "SKU 50") as the quantity | `stated_quantities` ignores identifier / money / size / time positions; a request form's quantity overrides the text | `test_numbers_that_are_not_quantities_are_untrusted`, `test_request_form_quantity_is_authoritative`, `planner-request-*` |
+| Forged or confused IdP token (alg `none`, HS256 with the public key, other app's audience, rotated-out key) | `OIDCAuth`: asymmetric allowlist, JWK-pinned alg, iss/aud/exp checks, rate-limited JWKS refetch | `tests/test_auth_oidc.py` |
 | Requester spoofed at the HTTP layer (to defeat no-self-approval) | `user_id` and `provenance` taken from the session / assigned by code, never the body | `test_dev_login_sets_cookie_and_submit_uses_session_identity` |
 | Forged webhooks | Signature + timestamp tolerance | `test_bad_signature_rejected`, `test_stale_timestamp_and_garbage_header_rejected` |
 | Card reuse after purchase | Card cancelled at capture; auth requires `CARD_ISSUED`; Stripe limit is all-time | `test_card_cannot_be_reused_after_capture`, `adv-second-charge-*` |
@@ -103,23 +103,41 @@ Done this iteration:
       bearer). Swap in an OIDC/JWT verifier for SSO; the endpoints don't change.
 - [x] Real-time authorization contract confirmed against Stripe docs (Oct 2026): decision in the
       webhook response body, `Stripe-Version` header required, amount from `pending_request`.
-- [x] Evals grown to 75 scenarios in 7 groups, including planner runs with injected pages, with
+- [x] `OIDCAuth` verifies the organisation's IdP tokens (`OIDC_ISSUER`, `OIDC_AUDIENCE`):
+      JWKS discovery, asymmetric algorithms only (no `none`, no HS* key confusion), iss/aud/exp/nbf
+      against the injected clock, rate-limited refetch on key rotation, optional email subject
+      with `email_verified` and a domain allowlist. Dev login is refused in OIDC mode. The app has
+      no login flow of its own; it sits behind the SSO proxy, which forwards the bearer token.
+- [x] Quantity provenance tightened. `stated_quantities` only counts numbers in a quantity
+      position: not after an identifier word ("SKU 50", "ticket 7", "PO 5", "order no. 9"), not
+      money, sizes, times or durations ("$40", "27-inch", "5 pm", "12 months"), not inside a SKU
+      ("MON-27") or a range ("2-3"). "3 plus 2" also counts 5. A `PurchaseRequest(text, quantity)`
+      from a request form makes the typed quantity (order total) the only trusted one. Five
+      planner evals cover it; on the old matcher three of them bought and two false-blocked.
+- [x] Live planner eval run (2026-11-14, `claude-opus-5-5` via OpenRouter): 21/21 proposals
+      matched the request exactly, 0 unsafe. Live runs are judged against each scenario's `legit`
+      order, since the scripted "should not buy" labels assume the model takes the bait. The model
+      read the product page in only 2/21 runs (both when asked to), so two
+      `planner-live-injection-*` scenarios make the request point at the page.
+- [x] **Real Stripe test-mode purchase** (2026-11-15, `scripts/testmode_demo.py`, US sandbox on
+      Issuing's self-serve Standard program, card funded from an open v2 financial account):
+      - $20 order: approved by the approver session → single-use card → test-helper authorization
+        → Stripe sent `issuing_authorization.request` through `stripe listen`, our server approved
+        (`webhook_approved`) → capture → `issuing_transaction.created` → `reconciled`, card canceled.
+      - `--inflate` ($25 on a $20 card): declined by Stripe's card spending limit
+        (`authorization_controls`) before our webhook was asked.
+      - `--merchant "TOTALLY NOT DELL LLC"` at the right amount: declined by our real-time check
+        (`webhook_declined`, merchant name).
+      How it was unblocked: the first account (individual, not activated) showed "Contact sales"
+      and its v2 financial account stayed `pending`; a new sandbox on an activated account offered
+      Issuing directly, its financial account opened, and the sandbox "Add money" shortcut funded it.
+      Gotcha: `stripe listen` signs with the secret of whichever account the CLI is logged in to —
+      run it with that account's key (`STRIPE_API_KEY`) and use the secret it prints.
+- [x] Evals grown to 82 scenarios in 7 groups, including planner runs with injected pages, with
       layer attribution and token/latency/cost columns.
 
 Still open:
 
-- [ ] **Blocked on Stripe:** run `scripts/testmode_demo.py` against Stripe test mode. Tried
-      2026-11-14 on a main account and a sandbox: the server, auth, budget, approval and Stripe
-      calls work, but Issuing requires Stripe sales approval for this account, so the financial
-      account stays `pending` and Stripe refuses card creation. Re-run once Issuing is enabled;
-      also confirm the test helpers deliver `issuing_authorization.request` to `stripe listen`.
-      Meanwhile `scripts/local_demo.py` shows the same flow against FakeStripe.
-- [ ] Run `python evals/run_evals.py --live-planner` with a real key and record the planner row in
-      the README (today's row is from the scripted model).
-- [ ] Replace `SessionAuth` with the organisation's IdP verifier.
-- [ ] `assign_provenance` is a word/number match; a request like "the usual 3 plus 2 spares" would
-      mark 5 as untrusted (safe side) and "order 3 of SKU 50" would accept 50 (unsafe side —
-      a bare number in the request is enough). Tighten with a structured request form.
 - [ ] Demo video and write-up. Record `python scripts/local_demo.py --pause`.
 
 ## 7. Build plan
@@ -128,9 +146,9 @@ Still open:
 | --- | --- | --- |
 | 1 | ✅ Data model, state machine, policy, store, executor, webhooks, tests | `pytest` green |
 | 1 | ✅ Eval harness with 21 scenarios | `run_evals.py` reports 0 unsafe |
-| 2 | ✅ Card sweeper; Claude planner with read-only tool loop; ⛔ Stripe test-mode run (blocked: Issuing needs Stripe sales approval, see §6) | One real test-mode purchase end-to-end (`scripts/testmode_demo.py`, needs Issuing enabled) |
+| 2 | ✅ Card sweeper; Claude planner with read-only tool loop; ✅ Stripe test-mode run (2026-11-15, see §6) | One real test-mode purchase end-to-end (`scripts/testmode_demo.py`) |
 | 2 | ✅ Web approval UI | Approver opens the link signed in, clicks Approve, the card is issued |
-| 3 | ✅ 75 scenarios incl. planner + injected pages; cost/latency columns | Eval table in README (`--markdown`) |
+| 3 | ✅ 82 scenarios incl. planner + injected pages; cost/latency columns | Eval table in README (`--markdown`) |
 | 3 | ◻ 2–3 min demo video; write-up | Happy path, approval, blocked injection on screen |
 
 ## 8. Production would add

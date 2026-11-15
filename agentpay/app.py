@@ -7,7 +7,8 @@ Forward test-mode webhooks:
 
 Endpoints
   POST /webhooks/stripe              signed Stripe events; real-time auth decision in the body
-  POST /auth/dev-login               {approver_id} -> session cookie (only if AGENTPAY_DEV_LOGIN=1)
+  POST /auth/dev-login               {approver_id} -> session cookie (only if AGENTPAY_DEV_LOGIN=1;
+                                     never with OIDC_ISSUER, where the IdP's bearer token is used)
   POST /intents                      submit a PurchaseIntent (requester = session subject)
   GET  /intents/{id}                 state + audit trail
   GET  /approvals/{token}            approval page (what, who, why, approve / reject)
@@ -31,7 +32,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from .approvals import ApprovalSigner, InvalidApproval
 from .config import RedactingFilter, load_dotenv
-from .auth import COOKIE_NAME, Authenticator, SessionAuth, Unauthenticated
+from .auth import COOKIE_NAME, Authenticator, OIDCAuth, SessionAuth, Unauthenticated
 from .executor import Executor
 from .models import PurchaseIntent
 from .policy import PolicyConfig
@@ -228,6 +229,26 @@ def seed_budgets(store: Store, spec: str, now: float) -> None:
             store.set_budget(team.strip(), period, int(limit))
 
 
+def auth_from_env(env) -> tuple[Authenticator, Optional[SessionAuth], bool]:
+    """(authenticator, dev session issuer, dev_login enabled).
+
+    OIDC_ISSUER set -> tokens from the organisation's IdP (OIDCAuth). Dev login is refused in
+    that mode: it would let anyone mint a session for any approver name.
+    Otherwise -> SessionAuth with SESSION_SECRET (dev / test mode).
+    """
+    dev_login = env.get("AGENTPAY_DEV_LOGIN") == "1"
+    issuer = env.get("OIDC_ISSUER")
+    if issuer:
+        if dev_login:
+            raise ValueError("AGENTPAY_DEV_LOGIN=1 cannot be combined with OIDC_ISSUER")
+        domains = [d.strip() for d in env.get("OIDC_ALLOWED_DOMAINS", "").split(",") if d.strip()]
+        return OIDCAuth(issuer, env["OIDC_AUDIENCE"], jwks_uri=env.get("OIDC_JWKS_URI") or None,
+                        subject_claim=env.get("OIDC_SUBJECT_CLAIM", "sub"),
+                        allowed_domains=domains or None), None, False
+    session = SessionAuth(env["SESSION_SECRET"].encode())
+    return session, session, dev_login
+
+
 def app_from_env() -> FastAPI:
     import stripe  # server extra
 
@@ -241,7 +262,7 @@ def app_from_env() -> FastAPI:
     seed_budgets(store, os.environ.get("BUDGETS", "it=500000"), time.time())
     gateway = LiveStripe(os.environ["STRIPE_SECRET_KEY"], os.environ["STRIPE_CARDHOLDER_ID"],
                          financial_account=os.environ.get("STRIPE_FINANCIAL_ACCOUNT") or None)
-    session = SessionAuth(os.environ["SESSION_SECRET"].encode())
+    auth, session, dev_login = auth_from_env(os.environ)
     base_url = os.environ.get("BASE_URL", "http://localhost:8000")
     vendors = {v: set(m.split("|")) for v, m in
                (pair.split("=") for pair in os.environ.get("VENDORS", "Dell=computer_software_stores").split(";"))}
@@ -257,10 +278,9 @@ def app_from_env() -> FastAPI:
             "APPROVAL NEEDED %s reasons=%s -> %s/approvals/%s", iid, reasons, base_url, token),
     )
     webhooks = WebhookHandler(store, gateway, os.environ["STRIPE_WEBHOOK_SECRET"], now=time.time)
-    return create_app(service, webhooks, store, session,
+    return create_app(service, webhooks, store, auth,
                       stripe_version=os.environ.get("STRIPE_API_VERSION", stripe.api_version),
-                      session_issuer=session, dev_login=os.environ.get("AGENTPAY_DEV_LOGIN") == "1",
-                      base_url=base_url)
+                      session_issuer=session, dev_login=dev_login, base_url=base_url)
 
 
 # uvicorn agentpay.app:app — built only when the environment (or a .env file) is configured, so

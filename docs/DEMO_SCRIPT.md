@@ -84,10 +84,10 @@ proposes. Code decides."
 **Screen:** run `python evals/run_evals.py` and let the table print. Or show the README results
 table.
 
-> Seventy-five adversarial and failure scenarios: zero unsafe purchases, zero duplicate charges.
-> This demo runs against an in-memory Stripe, because Issuing needs approval from Stripe's sales
-> team. The same flow runs against real Stripe test mode once that's enabled. Code and design
-> doc are in the repo.
+> Eighty-two adversarial and failure scenarios: zero unsafe purchases, zero duplicate charges.
+> This demo runs against an in-memory Stripe so it's repeatable, and the same flow has run
+> against real Stripe Issuing in test mode: real card, real-time decision, capture, reconcile.
+> Code and design doc are in the repo.
 
 ---
 

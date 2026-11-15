@@ -4,7 +4,8 @@ Two rules make this safe to pair with the rest of the system:
   1. The model gets read-only tools (catalog search, budget lookup, product page fetch).
      No payment tools. Nothing it returns is executed.
   2. The model does not label provenance. `assign_provenance` checks each critical value
-     against the user's own words and the trusted catalog, in code.
+     against the user's own words (or the request form's quantity field) and the trusted
+     catalog, in code.
 
 The Claude planner runs a manual tool loop over the Messages API (not the SDK's beta tool
 runner) so that the client is injectable: tests and evals pass a scripted stand-in and the
@@ -13,6 +14,7 @@ whole loop runs without network. Every run records a PlanTrace (tokens, latency,
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -41,7 +43,7 @@ class CatalogEntry:
 
 
 class Planner(Protocol):
-    def plan(self, request: str, user_id: str, team: str) -> PurchaseIntent: ...
+    def plan(self, request: "str | PurchaseRequest", user_id: str, team: str) -> PurchaseIntent: ...
 
 
 class PlannerError(Exception):
@@ -52,16 +54,105 @@ class PlannerRefused(PlannerError):
     """The model declined the request (stop_reason == "refusal")."""
 
 
-def assign_provenance(intent: PurchaseIntent, user_text: str, catalog: list[CatalogEntry]) -> PurchaseIntent:
+@dataclass(frozen=True)
+class PurchaseRequest:
+    """A request from the structured request form.
+
+    `quantity` is the total number of units the requester typed into a numeric field. When it
+    is present it is the only source of a trusted quantity: the free text is not searched for
+    numbers at all. Without it, `stated_quantities` reads quantities out of the text.
+    """
+    text: str
+    quantity: Optional[int] = None
+
+    def __post_init__(self):
+        if self.quantity is not None and (not isinstance(self.quantity, int) or self.quantity < 1):
+            raise ValueError("quantity must be a positive integer")
+
+
+_NUMBER_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+                 "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "dozen": 12,
+                 "a": 1, "an": 1}
+# A number right after one of these is an identifier, not a quantity: "SKU 50", "ticket 12",
+# "order #5", "room 4", "PO 1234".
+_ID_WORDS = {"sku", "skus", "model", "part", "item", "ticket", "po", "invoice", "room", "floor",
+             "building", "version", "ver", "v", "rev", "gen", "series", "ref", "id", "no", "number",
+             "num", "batch", "lot", "account", "acct", "ext", "extension", "case", "issue", "req",
+             "request", "step", "page", "line", "row", "#"}
+# A number right before one of these is money, time, a size or a rank, not a quantity.
+_UNIT_WORDS = {"%", "percent", "dollar", "dollars", "usd", "eur", "gbp", "cents", "cent", "bucks",
+               "k", "day", "days", "week", "weeks", "month", "months", "year", "years", "yr", "yrs",
+               "hour", "hours", "hr", "hrs", "minute", "minutes", "min", "mins", "am", "pm",
+               "inch", "inches", '"', "gb", "tb", "mb", "ghz", "hz", "w", "watt", "watts", "mm", "cm",
+               "ft", "feet", "th", "st", "nd", "rd", "x"}
+_CURRENCY = {"$", "€", "£", "¥"}
+_SUM_WORDS = {"plus", "+"}
+_TOKEN_RE = re.compile(r"\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?|[a-z]+|[^\sa-z\d]")
+
+
+def stated_quantities(user_text: str) -> set[int]:
+    """Numbers in the request that are in a quantity position.
+
+    Fails toward "untrusted": a number we can't place (an identifier, a price, a size, a date,
+    part of a SKU like MON-27, a range like 2-3) is not a stated quantity, so a proposal that
+    uses it goes to a human instead of being trusted.
+    """
+    toks = _TOKEN_RE.findall(user_text.lower())
+
+    def value(t: str) -> Optional[int]:
+        if t in _NUMBER_WORDS:
+            return _NUMBER_WORDS[t]
+        if re.fullmatch(r"\d{1,3}(?:,\d{3})+|\d+", t):
+            return int(t.replace(",", ""))
+        return None   # decimals and words
+
+    def prev_word(i: int) -> str:
+        j = i - 1
+        while j >= 0 and toks[j] in (".", ":"):   # "no. 5", "ticket: 12"
+            j -= 1
+        return toks[j] if j >= 0 else ""
+
+    def is_quantity(i: int) -> bool:
+        t = toks[i]
+        prev = toks[i - 1] if i > 0 else ""
+        nxt = toks[i + 1] if i + 1 < len(toks) else ""
+        after = toks[i + 2] if i + 2 < len(toks) else ""
+        if t in ("a", "an") and nxt == "dozen":     # "a dozen": the dozen carries the value
+            return False
+        if prev in _CURRENCY or prev_word(i) in _ID_WORDS:
+            return False
+        if prev in ("-", "/", ".") and i >= 2 and toks[i - 2].isalnum():   # MON-27, 1/2, v1.2
+            return False
+        if nxt in _UNIT_WORDS or nxt in _CURRENCY:
+            return False
+        if nxt in ("-", "/", ".", ":") and after[:1].isalnum():   # 27-inch, 2-3, 3/4, 5:30
+            return False
+        return True
+
+    found: list[tuple[int, int]] = []   # (token index, value)
+    for i, t in enumerate(toks):
+        v = value(t)
+        if v is not None and is_quantity(i):
+            found.append((i, v))
+    numbers = {v for _, v in found}
+    # "the usual 3 plus 2 spares" -> 5 is stated too.
+    for (i, a), (j, b) in zip(found, found[1:]):
+        if j == i + 2 and toks[i + 1] in _SUM_WORDS:
+            numbers.add(a + b)
+    return numbers
+
+
+def assign_provenance(intent: PurchaseIntent, request: "str | PurchaseRequest",
+                      catalog: list[CatalogEntry]) -> PurchaseIntent:
     by_sku = {(c.vendor, c.sku): c for c in catalog}
     vendors = {c.vendor for c in catalog}
-    numbers = {int(n) for n in re.findall(r"\b\d+\b", user_text)}
-    words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-             "eight": 8, "nine": 9, "ten": 10, "a": 1, "an": 1}
-    numbers |= {v for w, v in words.items() if re.search(rf"\b{w}\b", user_text.lower())}
 
     prov = {"vendor": Source.CATALOG if intent.vendor in vendors else Source.WEB}
-    qty_ok = all(i.quantity in numbers for i in intent.items)
+    if isinstance(request, PurchaseRequest) and request.quantity is not None:
+        qty_ok = sum(i.quantity for i in intent.items) == request.quantity
+    else:
+        numbers = stated_quantities(request.text if isinstance(request, PurchaseRequest) else request)
+        qty_ok = all(i.quantity in numbers for i in intent.items)
     price_ok = all(
         (intent.vendor, i.sku) in by_sku and by_sku[(intent.vendor, i.sku)].unit_amount == i.unit_amount
         for i in intent.items
@@ -79,8 +170,9 @@ class ScriptedPlanner:
         self.script = script
         self.catalog = catalog
 
-    def plan(self, request: str, user_id: str, team: str) -> PurchaseIntent:
-        return assign_provenance(self.script[request], request, self.catalog)
+    def plan(self, request: "str | PurchaseRequest", user_id: str, team: str) -> PurchaseIntent:
+        text = request.text if isinstance(request, PurchaseRequest) else request
+        return assign_provenance(self.script[text], request, self.catalog)
 
 
 # ---------------------------------------------------------------- tools (all strict, read-only)
@@ -158,6 +250,7 @@ quantity or price you propose."""
 @dataclass
 class PlanTrace:
     model: str
+    provider: str = "anthropic"
     turns: int = 0
     tool_calls: list[str] = field(default_factory=list)
     input_tokens: int = 0
@@ -174,10 +267,40 @@ class PlanTrace:
         return (self.input_tokens * inp + self.output_tokens * out) / 1_000_000
 
     def to_dict(self) -> dict:
-        return {"model": self.model, "turns": self.turns, "tool_calls": list(self.tool_calls),
+        return {"model": self.model, "provider": self.provider, "turns": self.turns, "tool_calls": list(self.tool_calls),
                 "input_tokens": self.input_tokens, "output_tokens": self.output_tokens,
                 "cache_read_tokens": self.cache_read_tokens, "latency_ms": round(self.latency_ms, 1),
                 "cost_usd": round(self.cost_usd, 6), "stop_reason": self.stop_reason, "error": self.error}
+
+
+OPENROUTER_BASE_URL = "https://openrouter.ai/api"   # Anthropic-compatible Messages endpoint
+
+
+def default_client(env: Optional[dict] = None) -> tuple[Any, str]:
+    """(client, provider) from the environment.
+
+    OPENROUTER_API_KEY, or an ANTHROPIC_API_KEY that is really an OpenRouter key (`sk-or-`),
+    routes the same Messages API calls through OpenRouter. Anything else is the Anthropic API
+    (ANTHROPIC_API_KEY, or the SDK's own credential lookup).
+    """
+    import anthropic  # optional dependency
+
+    env = os.environ if env is None else env
+    key = env.get("OPENROUTER_API_KEY") or ""
+    if not key and env.get("ANTHROPIC_API_KEY", "").startswith("sk-or-"):
+        key = env["ANTHROPIC_API_KEY"]
+    if key:
+        return anthropic.Anthropic(base_url=env.get("OPENROUTER_BASE_URL", OPENROUTER_BASE_URL),
+                                   auth_token=key, api_key=None), "openrouter"
+    return anthropic.Anthropic(), "anthropic"
+
+
+def api_model_id(model: str, provider: str) -> str:
+    """OpenRouter names models `anthropic/claude-opus-5.5`; the Anthropic API `claude-opus-5-5`."""
+    if provider != "openrouter" or "/" in model:
+        return model
+    m = re.fullmatch(r"(claude-[a-z]+)-(\d+)-(\d+)", model)
+    return f"anthropic/{m.group(1)}-{m.group(2)}.{m.group(3)}" if m else f"anthropic/{model}"
 
 
 BudgetLookup = Callable[[str], Optional[int]]        # team -> remaining cents, or None
@@ -196,12 +319,13 @@ class ClaudePlanner:
     def __init__(self, catalog: list[CatalogEntry], *, model: str = DEFAULT_MODEL, client: Any = None,
                  budget_lookup: Optional[BudgetLookup] = None, page_source: Optional[PageSource] = None,
                  max_turns: int = 8, max_tokens: int = 4096, log: Optional[Callable[[dict], None]] = None):
+        provider = "anthropic"
         if client is None:
-            import anthropic  # optional dependency
-
-            client = anthropic.Anthropic()
+            client, provider = default_client()
         self.client = client
-        self.model = model
+        self.provider = provider
+        self.model = model                               # canonical id: pricing, traces
+        self.api_model = api_model_id(model, provider)   # what the provider is sent
         self.catalog = catalog
         self.budget_lookup = budget_lookup or (lambda team: None)
         self.page_source = page_source or (lambda vendor, sku: None)
@@ -212,8 +336,8 @@ class ClaudePlanner:
         self.last_trace: Optional[PlanTrace] = None
 
     # ---------- the loop ----------
-    def plan(self, request: str, user_id: str, team: str) -> PurchaseIntent:
-        trace = PlanTrace(model=self.model)
+    def plan(self, request: "str | PurchaseRequest", user_id: str, team: str) -> PurchaseIntent:
+        trace = PlanTrace(model=self.model, provider=self.provider)
         self.last_trace = trace
         self.traces.append(trace)
         started = time.perf_counter()
@@ -227,13 +351,18 @@ class ClaudePlanner:
             self.log(trace.to_dict())
         return intent
 
-    def _run(self, request: str, user_id: str, team: str, trace: PlanTrace) -> PurchaseIntent:
-        messages: list[dict] = [{"role": "user", "content":
-                                 f"Requester: {user_id} (team: {team})\nRequest: {request}"}]
+    def _run(self, request: "str | PurchaseRequest", user_id: str, team: str, trace: PlanTrace) -> PurchaseIntent:
+        if isinstance(request, PurchaseRequest):
+            prompt = f"Requester: {user_id} (team: {team})\nRequest: {request.text}"
+            if request.quantity is not None:
+                prompt += f"\nTotal quantity (from the request form): {request.quantity}"
+        else:
+            prompt = f"Requester: {user_id} (team: {team})\nRequest: {request}"
+        messages: list[dict] = [{"role": "user", "content": prompt}]
         nudged = False
         for _ in range(self.max_turns):
             resp = self.client.messages.create(
-                model=self.model, max_tokens=self.max_tokens, system=SYSTEM_PROMPT,
+                model=self.api_model, max_tokens=self.max_tokens, system=SYSTEM_PROMPT,
                 tools=TOOLS, tool_choice={"type": "auto"}, messages=messages,
             )
             trace.turns += 1

@@ -3,7 +3,8 @@ import pytest
 
 from agentpay.models import LineItem, PurchaseIntent, Source, State
 from agentpay.planner import (TOOLS, CatalogEntry, ClaudePlanner, PlannerError, PlannerRefused,
-                              assign_provenance)
+                              PurchaseRequest, api_model_id, assign_provenance, default_client,
+                              stated_quantities)
 
 from agentpay.testing import CATALOG, FakeLLM, World
 
@@ -43,6 +44,64 @@ def test_price_off_catalog_and_unknown_vendor_are_untrusted():
 def test_number_words_count_as_user_stated():
     assert assign_provenance(intent(1), "Order a dock for Sam", SMALL).provenance["quantity"] == Source.USER
     assert assign_provenance(intent(7), "seven docks please", SMALL).provenance["quantity"] == Source.USER
+
+
+@pytest.mark.parametrize("text, qty", [
+    ("Order 3 of SKU 50", 50),                 # identifier after a keyword
+    ("Order 2 USB-C docks for ticket 7", 7),
+    ("Order 2 docks (SKU DOCK-1, PO 5)", 5),
+    ("Order 2 docks, order no. 9", 9),
+    ("order 2 MON-27 monitors", 27),           # part of a SKU
+    ("buy 2 27-inch monitors", 27),            # size
+    ("2 docks, under $40 each", 40),           # money
+    ("2 docks by 5 pm", 5),                    # time
+    ("2 seats for 12 months", 12),             # duration
+    ("2-3 docks", 3),                          # range: neither end is trusted
+])
+def test_numbers_that_are_not_quantities_are_untrusted(text, qty):
+    assert qty not in stated_quantities(text)
+    assert assign_provenance(intent(qty), text, SMALL).provenance["quantity"] == Source.WEB
+
+
+def test_quantity_positions_still_count():
+    assert stated_quantities("Order 3 of SKU 50") == {3}
+    assert stated_quantities("buy 4 27-inch monitors under $500") == {4}
+    assert stated_quantities("a dozen docks") == {12}
+    assert stated_quantities("ticket: 12, need 2 docks") == {2}
+
+
+def test_stated_sum_counts_as_user_stated():
+    text = "the usual 3 plus 2 spares"
+    assert stated_quantities(text) == {2, 3, 5}
+    assert assign_provenance(intent(5), text, SMALL).provenance["quantity"] == Source.USER
+
+
+def test_request_form_quantity_is_authoritative():
+    form = PurchaseRequest("docks for the new hires, same as last time", quantity=4)
+    assert assign_provenance(intent(4), form, SMALL).provenance["quantity"] == Source.USER
+    # The text says 6 but the form says 2: the form wins, so 6 goes to review.
+    form = PurchaseRequest("Order 6 USB-C docks", quantity=2)
+    assert assign_provenance(intent(6), form, SMALL).provenance["quantity"] == Source.WEB
+    # The form quantity is the order total, across line items.
+    two_lines = PurchaseIntent(user_id="alice", team="it", vendor="Dell", mcc="computer_software_stores",
+                               items=[LineItem("DOCK-1", "USB-C dock", 3, 6_000), LineItem("DOCK-1", "USB-C dock", 1, 6_000)])
+    assert assign_provenance(two_lines, PurchaseRequest("docks", 4), SMALL).provenance["quantity"] == Source.USER
+    # Without a quantity the form falls back to the text.
+    assert assign_provenance(intent(3), PurchaseRequest("Order 3 docks"), SMALL).provenance["quantity"] == Source.USER
+
+
+@pytest.mark.parametrize("bad", [0, -1, 2.5, "3"])
+def test_request_form_rejects_non_positive_or_non_integer_quantity(bad):
+    with pytest.raises(ValueError):
+        PurchaseRequest("docks", quantity=bad)
+
+
+def test_planner_passes_form_quantity_to_the_model():
+    llm = FakeLLM(proposal(qty=4))
+    it = ClaudePlanner(CATALOG, client=llm).plan(PurchaseRequest("docks for the new hires", 4), "alice", "it")
+    assert it.provenance["quantity"] == Source.USER
+    first = llm.requests[0]["messages"][0]["content"]
+    assert "Request: docks for the new hires" in first and "Total quantity (from the request form): 4" in first
 
 
 # ---------------------------------------------------------------- tool loop
@@ -128,3 +187,31 @@ def test_trace_logger_gets_one_record_per_run():
     p = ClaudePlanner(CATALOG, client=FakeLLM(proposal()), log=records.append)
     p.plan("3 docks", "alice", "it")
     assert len(records) == 1 and records[0]["model"] == "claude-opus-5-5" and records[0]["turns"] == 4
+
+
+# ---------------------------------------------------------------- provider selection
+def test_openrouter_model_ids():
+    assert api_model_id("claude-opus-5-5", "openrouter") == "anthropic/claude-opus-5.5"
+    assert api_model_id("claude-haiku-5-5", "openrouter") == "anthropic/claude-haiku-5.5"
+    assert api_model_id("anthropic/claude-sonnet-5", "openrouter") == "anthropic/claude-sonnet-5"
+    assert api_model_id("claude-opus-5-5", "anthropic") == "claude-opus-5-5"
+
+
+def test_default_client_picks_openrouter_for_sk_or_keys():
+    pytest.importorskip("anthropic")
+    c, provider = default_client({"ANTHROPIC_API_KEY": "sk-or-v1-abc"})
+    assert provider == "openrouter" and str(c.base_url).startswith("https://openrouter.ai/api")
+    assert c.auth_token == "sk-or-v1-abc" and c.api_key is None
+    c, provider = default_client({"OPENROUTER_API_KEY": "sk-or-v1-xyz", "ANTHROPIC_API_KEY": "sk-ant-1"})
+    assert provider == "openrouter" and c.auth_token == "sk-or-v1-xyz"
+    c, provider = default_client({"ANTHROPIC_API_KEY": "sk-ant-1"})
+    assert provider == "anthropic"
+
+
+def test_trace_records_canonical_model_and_provider():
+    p = ClaudePlanner(CATALOG, client=FakeLLM(proposal()))
+    p.provider, p.api_model = "openrouter", "anthropic/claude-opus-5.5"
+    p.plan("3 docks", "alice", "it")
+    assert p.client.requests[0]["model"] == "anthropic/claude-opus-5.5"
+    assert p.last_trace.model == "claude-opus-5-5" and p.last_trace.provider == "openrouter"
+    assert p.last_trace.cost_usd > 0      # priced by the canonical id
