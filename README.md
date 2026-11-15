@@ -10,7 +10,9 @@ new hires"; the agent plans the order, and **deterministic code** decides whethe
 
 <sub>Real output of `python scripts/local_demo.py` (FakeStripe + scripted Claude; everything else is the production code path). Regenerate with `python scripts/make_demo_gif.py`.</sub>
 
-▶ **[Watch the 3-minute narrated demo](docs/demo.mp4)** ([captions](docs/demo.srt))
+**3-minute narrated demo** ([captions](docs/demo.srt)):
+
+https://github.com/user-attachments/assets/680654bb-071e-4e58-93d8-b52db306c33b
 
 ## Results (current eval suite)
 
