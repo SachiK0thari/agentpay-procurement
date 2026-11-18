@@ -8,7 +8,7 @@ Idempotency in two layers:
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .models import State
 from .store import Store
@@ -22,7 +22,7 @@ class NotApproved(Exception):
 class Executor:
     def __init__(self, store: Store, gateway: StripeGateway, max_attempts: int = 4,
                  sleep: Callable[[float], None] = time.sleep,
-                 crash_hook: Optional[Callable[[str], None]] = None):
+                 crash_hook: Callable[[str], None] | None = None):
         self.store = store
         self.gateway = gateway
         self.max_attempts = max_attempts

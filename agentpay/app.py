@@ -28,7 +28,7 @@ import html
 import logging
 import os
 import time
-from typing import Callable, Mapping, Optional
+from collections.abc import Callable, Mapping
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -51,17 +51,17 @@ log = logging.getLogger("agentpay")
 
 def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Store, auth: Authenticator,
                *, stripe_version: str, user_teams: Mapping[str, str], now: Callable[[], float] = time.time,
-               session_issuer: Optional[SessionAuth] = None, dev_login: bool = False,
-               base_url: str = "", housekeeping_token: Optional[str] = None) -> FastAPI:
+               session_issuer: SessionAuth | None = None, dev_login: bool = False,
+               base_url: str = "", housekeeping_token: str | None = None) -> FastAPI:
     """`user_teams` maps a user id to the team whose budget they spend from; the key `*` is a
     catch-all (dev convenience: `USER_TEAMS=*=it`). `housekeeping_token` unset disables
     `POST /tasks/housekeeping` (403) rather than leaving it open."""
     app = FastAPI(title="agentpay")
 
-    def team_of(user: str) -> Optional[str]:
+    def team_of(user: str) -> str | None:
         return user_teams.get(user) or user_teams.get("*")
 
-    def current_user(request: Request, authorization: Optional[str] = Header(default=None)) -> str:
+    def current_user(request: Request, authorization: str | None = Header(default=None)) -> str:
         token = request.cookies.get(COOKIE_NAME)
         if authorization and authorization.lower().startswith("bearer "):
             token = authorization[7:].strip()
@@ -70,7 +70,7 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
         try:
             return auth.verify(token, now())
         except Unauthenticated as e:
-            raise HTTPException(401, f"session {e}")
+            raise HTTPException(401, f"session {e}") from e
 
     # ---------- Stripe ----------
     @app.post("/webhooks/stripe")
@@ -81,10 +81,10 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
             # event loop so one slow event can't stall the 2-second real-time deadline of others.
             res = await run_in_threadpool(webhooks.process, payload, stripe_signature)
         except InvalidSignature:
-            raise HTTPException(400, "invalid signature")
+            raise HTTPException(400, "invalid signature") from None
         except TransientStripeError as e:
             # Tell Stripe to retry the event; our handlers are idempotent.
-            raise HTTPException(503, f"stripe unavailable: {e}")
+            raise HTTPException(503, f"stripe unavailable: {e}") from e
         if res.decision is not None:  # real-time authorization decision
             log.info("realtime auth approved=%s reasons=%s", *res.decision)
             return JSONResponse(res.body, headers={"Stripe-Version": stripe_version})
@@ -119,13 +119,13 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
         try:
             intent = PurchaseIntent.from_dict(payload)
         except (KeyError, TypeError, ValueError) as e:
-            raise HTTPException(422, f"bad intent: {e}")
+            raise HTTPException(422, f"bad intent: {e}") from e
         try:
             r = service.submit(intent)
         except TransientStripeError as e:
-            raise HTTPException(503, f"stripe unavailable: {e}")
+            raise HTTPException(503, f"stripe unavailable: {e}") from e
         except PermanentStripeError as e:
-            raise HTTPException(502, f"stripe rejected the request (intent failed, budget released): {e}")
+            raise HTTPException(502, f"stripe rejected the request (intent failed, budget released): {e}") from e
         return {"intent_id": r.intent_id, "state": r.state.value, "reasons": r.reasons,
                 "approval_url": f"{base_url}/approvals/{r.approval_token}" if r.approval_token else None}
 
@@ -134,7 +134,7 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
         try:
             rec = store.get(intent_id)
         except KeyError:
-            raise HTTPException(404, "unknown intent")
+            raise HTTPException(404, "unknown intent") from None
         # 404, not 403: don't confirm to strangers that an intent id exists.
         if user not in (rec.intent.user_id, service.approvers.get(rec.intent.team)):
             raise HTTPException(404, "unknown intent")
@@ -167,16 +167,16 @@ def create_app(service: ProcurementService, webhooks: WebhookHandler, store: Sto
         try:
             r = fn(token, user)
         except InvalidApproval as e:
-            raise HTTPException(403, str(e))
+            raise HTTPException(403, str(e)) from e
         except TransientStripeError as e:
-            raise HTTPException(503, f"stripe unavailable: {e}")
+            raise HTTPException(503, f"stripe unavailable: {e}") from e
         except PermanentStripeError as e:
-            raise HTTPException(502, f"stripe rejected the request (intent failed, budget released): {e}")
+            raise HTTPException(502, f"stripe rejected the request (intent failed, budget released): {e}") from e
         return {"intent_id": r.intent_id, "state": r.state.value, "decided_by": user}
 
     # ---------- ops ----------
     @app.post("/tasks/housekeeping")
-    def housekeeping(x_housekeeping_token: Optional[str] = Header(default=None)):
+    def housekeeping(x_housekeeping_token: str | None = Header(default=None)):
         if not housekeeping_token or not x_housekeeping_token or \
                 not hmac.compare_digest(x_housekeeping_token.encode(), housekeeping_token.encode()):
             raise HTTPException(403, "housekeeping token required")
@@ -292,7 +292,7 @@ def user_teams_from_env(env, approvers: Mapping[str, str]) -> dict[str, str]:
     return teams
 
 
-def auth_from_env(env) -> tuple[Authenticator, Optional[SessionAuth], bool]:
+def auth_from_env(env) -> tuple[Authenticator, SessionAuth | None, bool]:
     """(authenticator, dev session issuer, dev_login enabled).
 
     OIDC_ISSUER set -> tokens from the organisation's IdP (OIDCAuth). Dev login is refused in

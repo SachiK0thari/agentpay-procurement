@@ -6,8 +6,9 @@ policy (pure) -> risk (rules + history) -> atomic budget reservation
 """
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from . import policy as policy_mod
 from . import risk as risk_mod
@@ -25,14 +26,14 @@ class SubmitResult:
     intent_id: str
     state: State
     reasons: list[str] = field(default_factory=list)
-    approval_token: Optional[str] = None
-    card_id: Optional[str] = None
+    approval_token: str | None = None
+    card_id: str | None = None
 
 
 class ProcurementService:
     def __init__(self, store: Store, policy_cfg: policy_mod.PolicyConfig, risk_cfg: risk_mod.RiskConfig,
                  signer: ApprovalSigner, executor: Executor, approvers: dict[str, str],
-                 now: Callable[[], float], notifier: Optional[Notifier] = None):
+                 now: Callable[[], float], notifier: Notifier | None = None):
         self.store = store
         self.policy_cfg = policy_cfg
         self.risk_cfg = risk_cfg
@@ -143,10 +144,9 @@ class ProcurementService:
                     self.store.release(iid)
                     done.append(iid)
                 continue
-            try:
+            # On error, issue_card has already failed the intent and released its budget.
+            with contextlib.suppress(TransientStripeError, PermanentStripeError):
                 self.executor.issue_card(iid)
-            except (TransientStripeError, PermanentStripeError):
-                pass  # issue_card already failed the intent and released its budget
             done.append(iid)
         return done
 

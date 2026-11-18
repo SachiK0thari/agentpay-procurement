@@ -23,7 +23,8 @@ import secrets
 import threading
 import time
 import urllib.request
-from typing import Any, Callable, Iterable, Optional, Protocol
+from typing import Any, Protocol
+from collections.abc import Callable, Iterable
 
 COOKIE_NAME = "agentpay_session"
 
@@ -61,14 +62,14 @@ class SessionAuth:
         try:
             payload, sig = token.split(".")
         except ValueError:
-            raise Unauthenticated("malformed")
+            raise Unauthenticated("malformed") from None
         if not hmac.compare_digest(sig, self._sign(payload)):
             raise Unauthenticated("bad_signature")
         try:
             claims = json.loads(_unb64(payload))
             sub, exp = str(claims["sub"]), int(claims["exp"])
         except (ValueError, KeyError, TypeError):
-            raise Unauthenticated("malformed")
+            raise Unauthenticated("malformed") from None
         if now > exp:
             raise Unauthenticated("expired")
         return sub
@@ -104,10 +105,10 @@ class OIDCAuth:
     allowed_domains if set, the subject's email domain must be one of these
     """
 
-    def __init__(self, issuer: str, audience: str, *, jwks: Optional[dict] = None,
-                 jwks_uri: Optional[str] = None, subject_claim: str = "sub",
+    def __init__(self, issuer: str, audience: str, *, jwks: dict | None = None,
+                 jwks_uri: str | None = None, subject_claim: str = "sub",
                  algorithms: Iterable[str] = DEFAULT_ALGORITHMS, leeway_s: int = 60,
-                 allowed_domains: Optional[Iterable[str]] = None, fetch: JwksFetch = _fetch_json,
+                 allowed_domains: Iterable[str] | None = None, fetch: JwksFetch = _fetch_json,
                  refetch_interval_s: int = 300):
         import jwt  # sso extra; imported here so SessionAuth needs no dependency
 
@@ -163,7 +164,7 @@ class OIDCAuth:
             except Unauthenticated:
                 raise
             except Exception:
-                raise Unauthenticated("idp_keys_unavailable")
+                raise Unauthenticated("idp_keys_unavailable") from None
 
     def _key_for(self, kid: str):
         if kid not in self._keys:
@@ -178,7 +179,7 @@ class OIDCAuth:
         try:
             header = jwt.get_unverified_header(token)
         except jwt.PyJWTError:
-            raise Unauthenticated("malformed")
+            raise Unauthenticated("malformed") from None
         alg = header.get("alg")
         if alg not in self.algorithms:
             raise Unauthenticated("bad_algorithm")
@@ -191,18 +192,18 @@ class OIDCAuth:
                                 options={"verify_exp": False, "verify_nbf": False, "verify_iat": False,
                                          "require": ["exp", "iss", "aud", "sub"]})
         except jwt.InvalidSignatureError:
-            raise Unauthenticated("bad_signature")
+            raise Unauthenticated("bad_signature") from None
         except jwt.InvalidAudienceError:
-            raise Unauthenticated("bad_audience")
+            raise Unauthenticated("bad_audience") from None
         except jwt.InvalidIssuerError:
-            raise Unauthenticated("bad_issuer")
+            raise Unauthenticated("bad_issuer") from None
         except jwt.PyJWTError:
-            raise Unauthenticated("malformed")
+            raise Unauthenticated("malformed") from None
         try:
             exp = float(claims["exp"])
             nbf = float(claims.get("nbf", now))
         except (TypeError, ValueError):
-            raise Unauthenticated("malformed")
+            raise Unauthenticated("malformed") from None
         if now > exp + self.leeway_s:
             raise Unauthenticated("expired")
         if nbf > now + self.leeway_s:

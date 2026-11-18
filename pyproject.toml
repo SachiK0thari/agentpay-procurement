@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "agentpay"
 version = "0.1.0"
@@ -5,15 +9,55 @@ description = "A B2B procurement agent with payments-grade guardrails on Stripe 
 requires-python = ">=3.11"
 dependencies = []
 
+# Lower bounds are the oldest versions CI has passed against (`uv sync --resolution lowest-direct`);
+# uv.lock pins the exact versions CI and local dev use by default.
 [project.optional-dependencies]
 stripe = ["stripe>=10"]
-llm = ["anthropic"]
-server = ["fastapi", "uvicorn", "httpx", "stripe>=10"]
+llm = ["anthropic>=0.40"]
+server = ["fastapi>=0.115", "uvicorn>=0.30", "httpx>=0.27", "stripe>=10"]
 sso = ["pyjwt[crypto]>=2.8"]
-dev = ["pytest", "httpx", "fastapi", "stripe>=10", "pyjwt[crypto]>=2.8"]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "fastapi>=0.115",
+    "stripe>=10",
+    "pyjwt[crypto]>=2.8",
+    "ruff>=0.12",
+    "mypy>=1.10",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.setuptools]
 packages = ["agentpay"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["miscellaneous"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "UP", "SIM"]
+# Long lines are left to judgement (dense test tables and SQL read better unwrapped).
+# SIM103: planner's guard chains read better as explicit returns.
+# UP042: StrEnum changes str(member), which the API and audit log serialize; keep (str, Enum).
+ignore = ["E501", "SIM103", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+# Scripts and evals put the repo root on sys.path before importing agentpay.
+"evals/*" = ["E402"]
+# make_demo_video.py: render() is called inside the iteration that defines it (B023 false positive).
+"scripts/*" = ["E402", "E741", "B023"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["agentpay"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+# Optional extras: stripe ships no stubs on older releases, anthropic is only in the `llm` extra.
+module = ["stripe", "stripe.*", "anthropic", "anthropic.*"]
+ignore_missing_imports = true

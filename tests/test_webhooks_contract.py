@@ -5,7 +5,7 @@ import pytest
 
 from agentpay.webhooks import InvalidSignature, requested_amount, sign
 
-from agentpay.testing import WEBHOOK_SECRET, World, make_intent
+from agentpay.testing import WEBHOOK_SECRET, make_intent
 
 
 def test_request_event_amount_is_read_from_pending_request(world):

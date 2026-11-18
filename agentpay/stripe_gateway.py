@@ -8,7 +8,7 @@ LiveStripe targets Stripe Issuing in TEST MODE. Verified against stripe-python 1
 from __future__ import annotations
 
 import threading
-from typing import Optional, Protocol
+from typing import Any, Protocol
 
 from .config import redact
 
@@ -83,7 +83,7 @@ class FakeStripe:
 
     # ---- Stripe-side card controls (what the network enforces, independent of our webhook)
     def authorize(self, card_id: str, amount: int, currency: str = "usd",
-                  mcc: Optional[str] = None) -> tuple[bool, Optional[str]]:
+                  mcc: str | None = None) -> tuple[bool, str | None]:
         card = self.cards.get(card_id)
         if card is None:
             return False, "card_not_found"
@@ -104,7 +104,7 @@ class FakeStripe:
 class LiveStripe:
     """Stripe Issuing, single-use virtual cards. Use a restricted test-mode key."""
 
-    def __init__(self, api_key: str, cardholder_id: str, financial_account: Optional[str] = None):
+    def __init__(self, api_key: str, cardholder_id: str, financial_account: str | None = None):
         """`financial_account` (fa_...): required on accounts using Stripe's v2 money management,
         where Card.create fails with "You need a financial account" unless the card names one."""
         import stripe  # optional dependency
@@ -117,20 +117,23 @@ class LiveStripe:
         self.financial_account = financial_account
 
     def create_card(self, *, intent_id, amount, currency, mcc, idempotency_key) -> str:
+        params: dict[str, Any] = {
+            "cardholder": self.cardholder_id,
+            "currency": currency,
+            "type": "virtual",
+            "status": "active",
+            "spending_controls": {
+                "spending_limits": [{"amount": amount, "interval": "all_time"}],
+                "allowed_categories": [mcc],
+            },
+            "metadata": {"intent_id": intent_id},
+            "idempotency_key": idempotency_key,
+        }
+        if self.financial_account:
+            # Not in the SDK's typed params yet; the API accepts it on v2 financial-account accounts.
+            params["financial_account_v2"] = self.financial_account
         with self._translate_errors():
-            card = self._stripe.issuing.Card.create(
-                cardholder=self.cardholder_id,
-                currency=currency,
-                type="virtual",
-                status="active",
-                spending_controls={
-                    "spending_limits": [{"amount": amount, "interval": "all_time"}],
-                    "allowed_categories": [mcc],
-                },
-                metadata={"intent_id": intent_id},
-                idempotency_key=idempotency_key,
-                **({"financial_account_v2": self.financial_account} if self.financial_account else {}),
-            )
+            card = self._stripe.issuing.Card.create(**params)
         return card.id
 
     def cancel_card(self, card_id, *, idempotency_key) -> None:
@@ -156,7 +159,8 @@ class _ErrorTranslator:
         if exc is None:
             return False
         s = self.s
-        if isinstance(exc, (s.APIConnectionError, s.RateLimitError)):
+        transient = (s.APIConnectionError, s.RateLimitError)
+        if isinstance(exc, transient):
             raise TransientStripeError(redact(str(exc))) from exc
         if isinstance(exc, s.APIError) and (getattr(exc, "http_status", None) or 500) >= 500:
             raise TransientStripeError(redact(f"stripe {exc.http_status}: {exc}")) from exc

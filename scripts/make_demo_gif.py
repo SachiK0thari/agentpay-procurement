@@ -13,7 +13,6 @@ import os
 import re
 import subprocess
 import sys
-import textwrap
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont

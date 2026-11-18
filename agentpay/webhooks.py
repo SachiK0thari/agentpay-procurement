@@ -31,7 +31,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .models import State
 from .store import Store
@@ -48,7 +48,7 @@ class InvalidSignature(Exception):
 @dataclass(frozen=True)
 class WebhookResult:
     body: dict
-    decision: Optional[tuple[bool, list[str]]] = None  # set for real-time authorization requests
+    decision: tuple[bool, list[str]] | None = None  # set for real-time authorization requests
 
 
 def sign(payload: bytes, secret: str, ts: int) -> str:
@@ -65,7 +65,7 @@ def verify_signature(payload: bytes, header: str, secret: str, now: float, toler
     try:
         ts_int = int(ts)
     except ValueError:
-        raise InvalidSignature("malformed timestamp")
+        raise InvalidSignature("malformed timestamp") from None
     if abs(now - ts_int) > tolerance_s:
         raise InvalidSignature("timestamp outside tolerance")
     expected = hmac.new(secret.encode(), f"{ts}.".encode() + payload, hashlib.sha256).hexdigest()

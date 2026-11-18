@@ -6,7 +6,7 @@ only ESCALATE. Nothing here can turn a review into an allow.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, Sequence
+from collections.abc import Callable, Sequence
 
 from .models import PurchaseIntent, RiskDecision, Source
 from .store import IntentRecord

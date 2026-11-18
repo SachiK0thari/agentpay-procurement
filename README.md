@@ -138,12 +138,16 @@ Sweeper: a card unused for 48h is cancelled, the intent EXPIRED, the budget rele
 ## Run it
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
+uv sync --locked --extra dev            # exact versions from uv.lock (or: pip install -e ".[dev]")
+. .venv/bin/activate
 pytest -q                               # 128 tests, no network
 python evals/run_evals.py               # per-scenario table + summary; exit 1 on unsafe/duplicate
 python evals/run_evals.py --markdown    # the tables above
+ruff check . && mypy                    # lint and types, as CI runs them
 ```
+
+CI runs all of the above on Python 3.11 and 3.12 against `uv.lock`, plus once against the
+lowest versions `pyproject.toml` allows.
 
 ### Against Stripe test mode (optional)
 

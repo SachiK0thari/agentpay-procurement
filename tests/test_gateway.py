@@ -1,12 +1,11 @@
-"""Known gaps #2 and #4: FakeStripe enforces card controls; LiveStripe maps 5xx to transient."""
+"""FakeStripe enforces card controls; LiveStripe maps 5xx to transient."""
 import pytest
 
 stripe = pytest.importorskip("stripe")  # `pip install -e ".[dev]"`
 
-from agentpay.models import State
-from agentpay.stripe_gateway import LiveStripe, PermanentStripeError, TransientStripeError
-
-from agentpay.testing import World, make_intent
+from agentpay.models import State  # noqa: E402
+from agentpay.stripe_gateway import LiveStripe, PermanentStripeError, TransientStripeError  # noqa: E402
+from agentpay.testing import make_intent  # noqa: E402
 
 
 # ---------------------------------------------------------------- card controls alone

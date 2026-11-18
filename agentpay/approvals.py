@@ -49,14 +49,14 @@ class ApprovalSigner:
         try:
             iid_b64, approver_b64, nonce, exp, sig = token.split(".")
         except ValueError:
-            raise InvalidApproval("malformed")
+            raise InvalidApproval("malformed") from None
         body = f"{iid_b64}.{approver_b64}.{nonce}.{exp}"
         if not hmac.compare_digest(sig, self._sign(body)):
             raise InvalidApproval("bad_signature")
         try:
             intent_id, approver_id, expires_at = _dec(iid_b64), _dec(approver_b64), int(exp)
         except (binascii.Error, UnicodeDecodeError, ValueError):
-            raise InvalidApproval("malformed")
+            raise InvalidApproval("malformed") from None
         if now > expires_at:
             raise InvalidApproval("expired")
         return ApprovalClaim(intent_id, approver_id, nonce, expires_at)

@@ -7,12 +7,11 @@ pytest.importorskip("fastapi")  # `pip install -e ".[dev]"`
 pytest.importorskip("httpx")
 from fastapi.testclient import TestClient  # noqa: E402
 
-from agentpay.app import create_app
-from agentpay.auth import COOKIE_NAME, SessionAuth
-from agentpay.models import State
-from agentpay.webhooks import sign
-
-from agentpay.testing import WEBHOOK_SECRET, World, make_intent
+from agentpay.app import create_app  # noqa: E402
+from agentpay.auth import COOKIE_NAME, SessionAuth  # noqa: E402
+from agentpay.models import State  # noqa: E402
+from agentpay.testing import WEBHOOK_SECRET, make_intent  # noqa: E402
+from agentpay.webhooks import sign  # noqa: E402
 
 STRIPE_VERSION = "2025-09-30.clover"
 HOUSEKEEPING_TOKEN = "hk-secret"

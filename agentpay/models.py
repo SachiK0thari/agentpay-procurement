@@ -64,7 +64,7 @@ class PurchaseIntent:
         return d
 
     @classmethod
-    def from_dict(cls, d: dict) -> "PurchaseIntent":
+    def from_dict(cls, d: dict) -> PurchaseIntent:
         return cls(
             user_id=d["user_id"],
             team=d["team"],

@@ -8,6 +8,7 @@ from agentpay.approvals import InvalidApproval
 from agentpay.models import Source, State
 from agentpay.state_machine import IllegalTransition, check
 from agentpay.store import Store, period_for
+from agentpay.stripe_gateway import TransientStripeError
 from agentpay.webhooks import InvalidSignature
 
 from agentpay.testing import TRUSTED, World, make_intent
@@ -144,7 +145,7 @@ def test_crash_after_card_creation_then_restart(world):
 
 def test_stripe_down_fails_cleanly_and_releases_budget(world):
     world.stripe.fail_next = 99
-    with pytest.raises(Exception):
+    with pytest.raises(TransientStripeError):
         world.service.submit(make_intent(20_000))
     iid = world.store.db.execute("SELECT intent_id FROM intents").fetchone()[0]
     assert world.store.get(iid).state == State.FAILED

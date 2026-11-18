@@ -17,7 +17,7 @@ import threading
 import time
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from .models import PurchaseIntent, State
 from .state_machine import PAYMENT_RANK, TERMINAL, check
@@ -65,7 +65,7 @@ class IntentRecord:
     intent: PurchaseIntent
     state: State
     reserved: int
-    card_id: Optional[str]
+    card_id: str | None
     created_at: float
     budget_period: str
     updated_at: float = 0.0
@@ -90,7 +90,7 @@ class Store:
         self.path = path
         self._memory = path == ":memory:"
         self._local = threading.local()
-        self._shared: Optional[sqlite3.Connection] = None
+        self._shared: sqlite3.Connection | None = None
         # Reentrant: public methods call each other (reserve -> get).
         self._lock = threading.RLock() if self._memory else nullcontext()
         if self._memory:
@@ -134,7 +134,7 @@ class Store:
         return self._record(row)
 
     @_locked
-    def get_by_card(self, card_id: str) -> Optional[IntentRecord]:
+    def get_by_card(self, card_id: str) -> IntentRecord | None:
         row = self.db.execute("SELECT * FROM intents WHERE card_id = ?", (card_id,)).fetchone()
         return self._record(row) if row else None
 
@@ -319,7 +319,8 @@ class Store:
 
     @_locked
     def ledger(self, intent_id: str | None = None) -> list[dict]:
-        q, args = "SELECT * FROM ledger", ()
+        q = "SELECT * FROM ledger"
+        args: tuple[str, ...] = ()
         if intent_id:
             q, args = q + " WHERE intent_id = ?", (intent_id,)
         return [dict(r) for r in self.db.execute(q, args).fetchall()]

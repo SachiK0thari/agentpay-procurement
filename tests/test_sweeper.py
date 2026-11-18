@@ -1,8 +1,8 @@
-"""Known gap #1: a card whose checkout never happened must not stay live forever."""
+"""A card whose checkout never happened must not stay live forever."""
 from agentpay.models import State
 from agentpay.store import period_for
 
-from agentpay.testing import World, make_intent
+from agentpay.testing import make_intent
 
 
 def test_unused_card_is_cancelled_expired_and_budget_released(world):
