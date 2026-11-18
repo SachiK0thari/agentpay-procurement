@@ -1,10 +1,3 @@
-
-
-
-
-
-
-
 # agentpay — a procurement agent that can't overspend
 
 [![CI](https://github.com/SachiK0thari/agentpay-procurement/actions/workflows/ci.yml/badge.svg)](https://github.com/SachiK0thari/agentpay-procurement/actions/workflows/ci.yml)
@@ -21,6 +14,7 @@ new hires"; the agent plans the order, and **deterministic code** decides whethe
 
 <details>
 <summary><b>▶ Watch the 2-minute narrated demo</b> (<a href="docs/demo.srt">captions</a>)</summary>
+
 https://github.com/user-attachments/assets/0a7a81c3-9d0e-4ef9-95bd-e6e4bd5055ba
 
 </details>
