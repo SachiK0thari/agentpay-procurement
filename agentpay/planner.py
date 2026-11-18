@@ -18,7 +18,8 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Protocol
+from collections.abc import Callable, Mapping
 
 from .models import LineItem, PurchaseIntent, Source
 
@@ -43,7 +44,7 @@ class CatalogEntry:
 
 
 class Planner(Protocol):
-    def plan(self, request: "str | PurchaseRequest", user_id: str, team: str) -> PurchaseIntent: ...
+    def plan(self, request: str | PurchaseRequest, user_id: str, team: str) -> PurchaseIntent: ...
 
 
 class PlannerError(Exception):
@@ -63,7 +64,7 @@ class PurchaseRequest:
     numbers at all. Without it, `stated_quantities` reads quantities out of the text.
     """
     text: str
-    quantity: Optional[int] = None
+    quantity: int | None = None
 
     def __post_init__(self):
         if self.quantity is not None and (not isinstance(self.quantity, int) or self.quantity < 1):
@@ -87,6 +88,9 @@ _UNIT_WORDS = {"%", "percent", "dollar", "dollars", "usd", "eur", "gbp", "cents"
                "ft", "feet", "th", "st", "nd", "rd", "x"}
 _CURRENCY = {"$", "€", "£", "¥"}
 _SUM_WORDS = {"plus", "+"}
+# Words after a quantity that end the phrase it counts: "3 docks and 5 monitors", "3 docks, 5 monitors".
+_PHRASE_BREAKS = {"and", "&", ",", ";", "plus", "+", "with", "for", "to"}
+_PHRASE_WINDOW = 6   # tokens after a quantity searched for the item it counts ("3 usb - c docks")
 _TOKEN_RE = re.compile(r"\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?|[a-z]+|[^\sa-z\d]")
 
 
@@ -97,9 +101,18 @@ def stated_quantities(user_text: str) -> set[int]:
     part of a SKU like MON-27, a range like 2-3) is not a stated quantity, so a proposal that
     uses it goes to a human instead of being trusted.
     """
+    return {v for v, _ in quantity_mentions(user_text)}
+
+
+def quantity_mentions(user_text: str) -> list[tuple[int, list[str]]]:
+    """Each stated quantity with the words that follow it, up to the end of its phrase.
+
+    "3 USB-C docks and 5 monitors" -> [(3, ["usb", "-", "c", "docks"]), (5, ["monitors"])].
+    A sum ("3 plus 2 spares") is one more mention, with the words after its last number.
+    """
     toks = _TOKEN_RE.findall(user_text.lower())
 
-    def value(t: str) -> Optional[int]:
+    def value(t: str) -> int | None:
         if t in _NUMBER_WORDS:
             return _NUMBER_WORDS[t]
         if re.fullmatch(r"\d{1,3}(?:,\d{3})+|\d+", t):
@@ -134,15 +147,66 @@ def stated_quantities(user_text: str) -> set[int]:
         v = value(t)
         if v is not None and is_quantity(i):
             found.append((i, v))
-    numbers = {v for _, v in found}
+    at = {i for i, _ in found}
+
+    def phrase(i: int) -> list[str]:
+        words: list[str] = []
+        for j in range(i + 1, min(i + 1 + _PHRASE_WINDOW, len(toks))):
+            if toks[j] in _PHRASE_BREAKS or j in at:
+                break
+            words.append(toks[j])
+        return words
+
+    mentions = [(v, phrase(i)) for i, v in found]
     # "the usual 3 plus 2 spares" -> 5 is stated too.
-    for (i, a), (j, b) in zip(found, found[1:]):
+    for (i, a), (j, b) in zip(found, found[1:], strict=False):
         if j == i + 2 and toks[i + 1] in _SUM_WORDS:
-            numbers.add(a + b)
-    return numbers
+            mentions.append((a + b, phrase(j)))
+    return mentions
 
 
-def assign_provenance(intent: PurchaseIntent, request: "str | PurchaseRequest",
+def _stem(word: str) -> str:
+    """Crude singular: "docks" -> "dock", "boxes" -> "box". Only used to compare two words."""
+    if word.endswith("es") and len(word) > 4 and word[-3] in "sxz":
+        return word[:-2]
+    if word.endswith("s") and len(word) > 3 and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _item_noun(entry: CatalogEntry) -> str:
+    """The head noun of a catalog name, which a request uses to count it.
+
+    "27-inch monitor" -> "monitor", "Figma Professional seat (annual)" -> "seat". Only the head
+    noun: "3 USB-C cables" must not count toward the "USB-C dock".
+    """
+    words = re.findall(r"[a-z]+", entry.description.lower().split("(")[0])
+    return _stem(words[-1]) if words else ""
+
+
+def quantities_bound_to_items(intent: PurchaseIntent, request_text: str,
+                              by_sku: dict[tuple[str, str], CatalogEntry]) -> bool:
+    """Every line item's quantity is stated in the request right before a word naming that item.
+
+    "3 docks and 5 monitors" binds 3 to the dock and 5 to the monitor, so a proposal of 5 docks and
+    3 monitors does not bind and goes to review. Item names come from the catalog, never from the
+    model's own `description`, which an injected page could word to match anything. Each mention
+    binds at most one line item. A line item that isn't in the catalog can't bind.
+    """
+    unused = [(v, {_stem(w) for w in words}) for v, words in quantity_mentions(request_text)]
+    for item in intent.items:
+        entry = by_sku.get((intent.vendor, item.sku))
+        if entry is None:
+            return False
+        noun = _item_noun(entry)
+        hit = next((k for k, (v, words) in enumerate(unused) if v == item.quantity and noun in words), None)
+        if hit is None:
+            return False
+        unused.pop(hit)
+    return True
+
+
+def assign_provenance(intent: PurchaseIntent, request: str | PurchaseRequest,
                       catalog: list[CatalogEntry]) -> PurchaseIntent:
     by_sku = {(c.vendor, c.sku): c for c in catalog}
     vendors = {c.vendor for c in catalog}
@@ -151,8 +215,12 @@ def assign_provenance(intent: PurchaseIntent, request: "str | PurchaseRequest",
     if isinstance(request, PurchaseRequest) and request.quantity is not None:
         qty_ok = sum(i.quantity for i in intent.items) == request.quantity
     else:
-        numbers = stated_quantities(request.text if isinstance(request, PurchaseRequest) else request)
-        qty_ok = all(i.quantity in numbers for i in intent.items)
+        text = request.text if isinstance(request, PurchaseRequest) else request
+        if len(intent.items) > 1:
+            # Several line items: each quantity must be stated *for that item*, not just somewhere.
+            qty_ok = quantities_bound_to_items(intent, text, by_sku)
+        else:
+            qty_ok = all(i.quantity in stated_quantities(text) for i in intent.items)
     price_ok = all(
         (intent.vendor, i.sku) in by_sku and by_sku[(intent.vendor, i.sku)].unit_amount == i.unit_amount
         for i in intent.items
@@ -170,7 +238,7 @@ class ScriptedPlanner:
         self.script = script
         self.catalog = catalog
 
-    def plan(self, request: "str | PurchaseRequest", user_id: str, team: str) -> PurchaseIntent:
+    def plan(self, request: str | PurchaseRequest, user_id: str, team: str) -> PurchaseIntent:
         text = request.text if isinstance(request, PurchaseRequest) else request
         return assign_provenance(self.script[text], request, self.catalog)
 
@@ -258,8 +326,8 @@ class PlanTrace:
     cache_read_tokens: int = 0
     cache_creation_tokens: int = 0
     latency_ms: float = 0.0
-    stop_reason: Optional[str] = None
-    error: Optional[str] = None
+    stop_reason: str | None = None
+    error: str | None = None
 
     @property
     def cost_usd(self) -> float:
@@ -276,7 +344,7 @@ class PlanTrace:
 OPENROUTER_BASE_URL = "https://openrouter.ai/api"   # Anthropic-compatible Messages endpoint
 
 
-def default_client(env: Optional[dict] = None) -> tuple[Any, str]:
+def default_client(env: Mapping[str, str] | None = None) -> tuple[Any, str]:
     """(client, provider) from the environment.
 
     OPENROUTER_API_KEY, or an ANTHROPIC_API_KEY that is really an OpenRouter key (`sk-or-`),
@@ -285,7 +353,8 @@ def default_client(env: Optional[dict] = None) -> tuple[Any, str]:
     """
     import anthropic  # optional dependency
 
-    env = os.environ if env is None else env
+    if env is None:
+        env = os.environ
     key = env.get("OPENROUTER_API_KEY") or ""
     if not key and env.get("ANTHROPIC_API_KEY", "").startswith("sk-or-"):
         key = env["ANTHROPIC_API_KEY"]
@@ -303,8 +372,8 @@ def api_model_id(model: str, provider: str) -> str:
     return f"anthropic/{m.group(1)}-{m.group(2)}.{m.group(3)}" if m else f"anthropic/{model}"
 
 
-BudgetLookup = Callable[[str], Optional[int]]        # team -> remaining cents, or None
-PageSource = Callable[[str, str], Optional[str]]      # (vendor, sku) -> page text, or None
+BudgetLookup = Callable[[str], int | None]        # team -> remaining cents, or None
+PageSource = Callable[[str, str], str | None]      # (vendor, sku) -> page text, or None
 
 
 class ClaudePlanner:
@@ -317,8 +386,8 @@ class ClaudePlanner:
     """
 
     def __init__(self, catalog: list[CatalogEntry], *, model: str = DEFAULT_MODEL, client: Any = None,
-                 budget_lookup: Optional[BudgetLookup] = None, page_source: Optional[PageSource] = None,
-                 max_turns: int = 8, max_tokens: int = 4096, log: Optional[Callable[[dict], None]] = None):
+                 budget_lookup: BudgetLookup | None = None, page_source: PageSource | None = None,
+                 max_turns: int = 8, max_tokens: int = 4096, log: Callable[[dict], None] | None = None):
         provider = "anthropic"
         if client is None:
             client, provider = default_client()
@@ -333,10 +402,10 @@ class ClaudePlanner:
         self.max_tokens = max_tokens
         self.log = log or (lambda rec: None)
         self.traces: list[PlanTrace] = []
-        self.last_trace: Optional[PlanTrace] = None
+        self.last_trace: PlanTrace | None = None
 
     # ---------- the loop ----------
-    def plan(self, request: "str | PurchaseRequest", user_id: str, team: str) -> PurchaseIntent:
+    def plan(self, request: str | PurchaseRequest, user_id: str, team: str) -> PurchaseIntent:
         trace = PlanTrace(model=self.model, provider=self.provider)
         self.last_trace = trace
         self.traces.append(trace)
@@ -351,7 +420,7 @@ class ClaudePlanner:
             self.log(trace.to_dict())
         return intent
 
-    def _run(self, request: "str | PurchaseRequest", user_id: str, team: str, trace: PlanTrace) -> PurchaseIntent:
+    def _run(self, request: str | PurchaseRequest, user_id: str, team: str, trace: PlanTrace) -> PurchaseIntent:
         if isinstance(request, PurchaseRequest):
             prompt = f"Requester: {user_id} (team: {team})\nRequest: {request.text}"
             if request.quantity is not None:

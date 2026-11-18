@@ -6,7 +6,7 @@ from agentpay.planner import (TOOLS, CatalogEntry, ClaudePlanner, PlannerError, 
                               PurchaseRequest, api_model_id, assign_provenance, default_client,
                               stated_quantities)
 
-from agentpay.testing import CATALOG, FakeLLM, World
+from agentpay.testing import CATALOG, FakeLLM
 
 SMALL = [CatalogEntry("Dell", "DOCK-1", "USB-C dock", 6_000, "computer_software_stores")]
 
@@ -74,6 +74,61 @@ def test_stated_sum_counts_as_user_stated():
     text = "the usual 3 plus 2 spares"
     assert stated_quantities(text) == {2, 3, 5}
     assert assign_provenance(intent(5), text, SMALL).provenance["quantity"] == Source.USER
+
+
+DOCK_AND_CABLE = SMALL + [CatalogEntry("Dell", "CABLE-1", "USB-C cable", 1_500, "computer_software_stores")]
+
+
+def two_items(docks, cables, cable_desc="USB-C cable"):
+    return PurchaseIntent(user_id="alice", team="it", vendor="Dell", mcc="computer_software_stores",
+                          items=[LineItem("DOCK-1", "USB-C dock", docks, 6_000),
+                                 LineItem("CABLE-1", cable_desc, cables, 1_500)])
+
+
+def test_multi_item_quantities_bind_to_their_items():
+    text = "Order 3 USB-C docks and 5 USB-C cables"
+    assert assign_provenance(two_items(3, 5), text, DOCK_AND_CABLE).provenance["quantity"] == Source.USER
+    # Swapped: both numbers were stated, but not for these items.
+    assert assign_provenance(two_items(5, 3), text, DOCK_AND_CABLE).provenance["quantity"] == Source.WEB
+
+
+def test_multi_item_binding_uses_catalog_names_not_model_descriptions():
+    # The model can't make "3" bind to the cable by describing the cable as a dock.
+    text = "Order 3 USB-C docks and 3 monitors"
+    p = assign_provenance(two_items(3, 3, cable_desc="USB-C dock cable"), text, DOCK_AND_CABLE).provenance
+    assert p["quantity"] == Source.WEB
+
+
+def test_multi_item_shared_words_dont_bind():
+    # "USB-C" is in both names; only the head noun (dock, cable) counts.
+    text = "Order 3 USB-C cables and 5 USB-C cables"
+    assert assign_provenance(two_items(3, 5), text, DOCK_AND_CABLE).provenance["quantity"] == Source.WEB
+
+
+def test_multi_item_each_mention_binds_one_line():
+    both_docks = PurchaseIntent(user_id="alice", team="it", vendor="Dell", mcc="computer_software_stores",
+                                items=[LineItem("DOCK-1", "USB-C dock", 3, 6_000), LineItem("DOCK-1", "USB-C dock", 3, 6_000)])
+    assert assign_provenance(both_docks, "Order 3 docks", SMALL).provenance["quantity"] == Source.WEB
+
+
+def test_multi_item_off_catalog_line_goes_to_review():
+    off = PurchaseIntent(user_id="alice", team="it", vendor="Dell", mcc="computer_software_stores",
+                         items=[LineItem("DOCK-1", "USB-C dock", 3, 6_000), LineItem("HUB-9", "USB hub", 2, 2_000)])
+    assert assign_provenance(off, "Order 3 docks and 2 hubs", SMALL).provenance["quantity"] == Source.WEB
+
+
+def test_multi_item_number_words_and_sizes():
+    text = "a dock and two 27-inch monitors for the pod"
+    cat = SMALL + [CatalogEntry("Dell", "MON-27", "27-inch monitor", 32_000, "computer_software_stores")]
+    order = PurchaseIntent(user_id="alice", team="it", vendor="Dell", mcc="computer_software_stores",
+                           items=[LineItem("MON-27", "27-inch monitor", 2, 32_000), LineItem("DOCK-1", "USB-C dock", 1, 6_000)])
+    assert assign_provenance(order, text, cat).provenance["quantity"] == Source.USER
+
+
+def test_a_counts_as_one_anywhere_known_limitation():
+    # Documented in DESIGN.md: "a" is read as the quantity 1 even when it isn't one. It can only
+    # make a 1-unit single-item proposal look user-stated, which is the smallest possible order.
+    assert 1 in stated_quantities("docks for a new hire")
 
 
 def test_request_form_quantity_is_authoritative():

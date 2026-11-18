@@ -2,7 +2,6 @@
 import copy
 import json
 from types import SimpleNamespace
-from typing import Optional
 
 from agentpay.approvals import ApprovalSigner
 from agentpay.executor import Executor
@@ -22,6 +21,7 @@ TRUSTED = {"vendor": Source.CATALOG, "quantity": Source.USER, "unit_amount": Sou
 CATALOG = [
     CatalogEntry("Dell", "DOCK-1", "USB-C dock", 6_000, MCC),
     CatalogEntry("Dell", "MON-27", "27-inch monitor", 32_000, MCC),
+    CatalogEntry("Dell", "CABLE-1", "USB-C cable", 1_500, MCC),
     CatalogEntry("Dell", "LAPTOP-1", "Latitude laptop", 120_000, MCC),
     CatalogEntry("Figma", "SEAT-PRO", "Figma Professional seat (annual)", 1_500, MCC),
 ]
@@ -58,7 +58,7 @@ class World:
         self.store.set_budget("it", period_for(self.clock()), budget)
         self.stripe = FakeStripe()
         self.executor = Executor(self.store, self.stripe, sleep=lambda _: None)
-        self.notified = []
+        self.notified: list[tuple] = []
         self.service = ProcurementService(
             store=self.store,
             policy_cfg=PolicyConfig(vendors={"Dell": {MCC}, "Figma": {"computer_software_stores"}}),
@@ -72,7 +72,7 @@ class World:
         self.webhooks = WebhookHandler(self.store, self.stripe, WEBHOOK_SECRET, now=self.clock)
         self._n = 0
 
-    def remaining_budget(self, team: str) -> Optional[int]:
+    def remaining_budget(self, team: str) -> int | None:
         b = self.store.budget(team, period_for(self.clock()))
         return None if not b else b["limit_cents"] - b["spent_cents"] - b["reserved_cents"]
 
@@ -130,6 +130,7 @@ class World:
                                    self.auth_request(card_id, amount, name=name, category=category, currency=currency),
                                    event_id=f"req:{card_id}:{amount}:{self._n}")
             if not res.body["approved"]:
+                assert res.decision is not None  # set for every authorization request
                 return False, "realtime_auth:" + ",".join(res.decision[1])
         self.stripe.capture(card_id, amount)
         txn_id = txn_id or f"ipi_{card_id}_{self._n}"
@@ -159,7 +160,7 @@ class FakeLLM:
     is that the guardrails downstream hold regardless of what the model proposes.
     """
 
-    def __init__(self, proposal: Optional[dict] = None,
+    def __init__(self, proposal: dict | None = None,
                  tool_calls=(("search_catalog", {"query": "usb-c dock"}),
                              ("fetch_product_page", {"vendor": "Dell", "sku": "DOCK-1"}),
                              ("get_budget", {"team": "it"})),
