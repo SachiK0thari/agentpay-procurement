@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import array
-import os
 import re
 import shutil
 import subprocess
@@ -25,7 +24,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from make_demo_gif import BG, COLS, DIMC, FG, SGR, run_demo, spans, wrap  # noqa: E402
+from make_demo_gif import BG, COLS, DIMC, SGR, run_demo, spans, wrap  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 W, H, FPS, RATE = 1920, 1080, 30, 22050
@@ -50,6 +49,7 @@ SANS = ["/System/Library/Fonts/HelveticaNeue.ttc", "/System/Library/Fonts/Helvet
 REG, BOLD = _font(MONO, FONT_SIZE), _font(MONO, FONT_SIZE, 1)
 CAP = _font(SANS, 34)
 TITLE, SUB = _font(SANS, 96, 1), _font(SANS, 44)
+STAT, LABEL, NOTE = _font(SANS, 104, 1), _font(SANS, 32), _font(SANS, 34)
 CW, LH = REG.getlength("M"), int(FONT_SIZE * 1.45)
 BAR, PAD = 40, 26
 TW, TH = int(PAD * 2 + CW * COLS), BAR + PAD * 2 + LH * ROWS
@@ -213,16 +213,36 @@ def term_frame(lines: list[str], highlight: list[str], caption: str, title: str)
     return img
 
 
-def title_frame(caption: str, step: int) -> Image.Image:
+def _centred(d: ImageDraw.ImageDraw, text: str, y: float, font, fill, cx: float = W / 2):
+    d.text((cx - font.getlength(text) / 2, y), text, font=font, fill=fill)
+
+
+def title_frame(caption: str, step: int, stats: dict[str, str]) -> Image.Image:
+    """Intro card. step = index of the sentence being spoken: 0-1 problem, 2-4 X/Y/Z, 5 hook."""
     img = Image.new("RGB", (W, H), PAGE)
     d = ImageDraw.Draw(img)
-    t = "agentpay"
-    d.text(((W - TITLE.getlength(t)) / 2, 300), t, font=TITLE, fill=(240, 240, 240))
-    s = "A procurement agent on Stripe Issuing"
-    d.text(((W - SUB.getlength(s)) / 2, 430), s, font=SUB, fill=DIMC)
-    if step >= 3:
-        s = "The model proposes. Code decides."
-        d.text(((W - SUB.getlength(s)) / 2, 540), s, font=SUB, fill=ACCENT)
+    white = (240, 240, 240)
+    if step < 2:                                         # the problem
+        _centred(d, "agentpay", 300, TITLE, white)
+        if step >= 1:
+            _centred(d, "Overspending · Prompt injection · Duplicate charges · False success", 470, SUB, DIMC)
+    else:                                                # what was built, with the real numbers
+        _centred(d, "agentpay", 140, TITLE, white)
+        _centred(d, "A procurement agent on Stripe Issuing", 270, SUB, DIMC)
+        if step >= 3:
+            tiles = [(stats["unsafe_purchases"], "unsafe purchases"),
+                     (stats["duplicate_charges"], "duplicate charges"),
+                     (stats["adversarial_blocked"], "attacks blocked"),
+                     (stats["tests"], "tests passing")]
+            col = 380
+            for i, (num, label) in enumerate(tiles):
+                cx = W / 2 + (i - 1.5) * col
+                _centred(d, num, 390, STAT, ACCENT if num == "0" or "/" in num else white, cx)
+                _centred(d, label, 515, LABEL, DIMC, cx)
+            _centred(d, f"across {stats['scenarios']} eval scenarios", 585, NOTE, DIMC)
+        if step >= 4:
+            _centred(d, "The model proposes. Code decides.", 690, SUB, ACCENT)
+            _centred(d, "Single-use Issuing cards  ·  SSO-gated approvals  ·  Idempotent retries", 770, NOTE, DIMC)
     draw_caption(d, caption)
     return img
 
@@ -279,7 +299,7 @@ def build(segments: list[Segment], voice: str | None, rate: int, work: Path):
 
             def render(caption: str, hl: list[str]):
                 if seg.kind == "title":
-                    return title_frame(caption, sum(len(c.sentences) for c in seg.chunks[:ci]) + idx)
+                    return title_frame(caption, sum(len(c.sentences) for c in seg.chunks[:ci]) + idx, seg.stats)
                 return term_frame(shown, hl, caption, seg.title)
 
             # reveal new lines while the first sentence starts
