@@ -130,7 +130,8 @@ Sweeper: a card unused for 48h is cancelled, the intent EXPIRED, the budget rele
 | `scripts/testmode_demo.py` | One real purchase against Stripe test mode, via the API + Issuing test helpers. Ran end to end on 2026-11-15 (see DESIGN.md §6). Needs Issuing enabled on the account. |
 | `scripts/local_demo.py` | The demo-video walkthrough (happy path, approval, injection, overcharge / look-alike merchant) against FakeStripe + a scripted model. No account or network. |
 | `scripts/make_demo_gif.py`, `docs/demo.gif` | Renders the README GIF from the real demo output (needs `pip install pillow`). |
-| `docs/WRITEUP.md`, `docs/DEMO_SCRIPT.md` | Project write-up (results, what live testing found, limitations) and the narration script for the demo video. |
+| `scripts/make_demo_video.py`, `docs/demo_video.yaml` | Renders the narrated demo video from a YAML script; metrics are filled from a live eval run (see `docs/DEMO_SCRIPT.md`). |
+| `docs/WRITEUP.md`, `docs/DEMO_SCRIPT.md` | Project write-up (results, what live testing found, limitations) and how the demo video is made. |
 | `tests/` | 167 tests (1 needs the `llm` extra): one group per guardrail, each attacked on its own. |
 | `evals/` | 88 scenarios + runner (`--json`, `--markdown`, `--live-planner`). |
 | `DESIGN.md` | Decisions, trade-offs, threat model, build plan, open items. |

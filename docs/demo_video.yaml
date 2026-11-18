@@ -1,0 +1,111 @@
+# Script for the narrated demo video, rendered by scripts/make_demo_video.py.
+#
+# Audience: recruiters (the Why and What must land in the first ~20s) and hiring managers
+# (the How: design decisions, how quality was measured). Target length 90-120s.
+# Structure: Why -> What -> How -> Close (the XYZ formula: accomplished X, measured by Y, by doing Z).
+#
+# Metrics are never typed in by hand. {placeholders} are filled at render time from the live run:
+#   scenarios, unsafe, duplicates, attacks_blocked, attacks  <- python evals/run_evals.py --json (summary)
+#   tests                                                    <- pytest --collect-only
+# Static facts below cite the file they come from. The renderer refuses to run while any
+# [[PLACEHOLDER]] remains or a {name} is unknown.
+
+# Voice: ElevenLabs (ELEVENLABS_VOICE_ID in .env). say_voice/rate apply only with --tts say.
+say_voice: "Ava (Premium)"
+rate: 185
+
+static:
+  review_bugs: 8     # docs/WRITEUP.md, "Bugs found in review" table (8 rows)
+
+outro:
+  title: agentpay
+  subtitle: A purchasing agent on Stripe Issuing
+  repo: github.com/SachiK0thari/agentpay-procurement
+  # name / role / linkedin / demo: left out on purpose (repo link only)
+
+scenes:
+  # ── WHY ─────────────────────────────────────────────────────────────────────────────
+  - id: hook
+    xyz: why
+    kind: problem
+    chunks:
+      - say:
+          - "Give an AI agent a company card, and it can overspend, get talked into a bigger order by a web page, or charge you twice."
+          - "Better prompts don't fix that."
+
+  # ── WHAT ────────────────────────────────────────────────────────────────────────────
+  - id: result
+    xyz: what
+    kind: stats
+    chunks:
+      - say:
+          - "So I built agentpay, a purchasing agent on Stripe Issuing, where the model proposes and code decides."
+          - "Across {scenarios} test scenarios, including {attacks} attacks, it made zero unsafe purchases and zero duplicate charges."
+
+  - id: happy-path
+    xyz: what
+    kind: terminal
+    demo_scene: 1        # scripts/local_demo.py scene 1
+    chunks:
+      - say: ["A teammate asks for three USB-C docks, and Claude plans the order with read-only tools."]
+        until: "Model proposes"
+        highlight: ["Planner tools", "Model proposes"]
+      - say: ["Code checks policy and budget, then issues a single-use card for exactly a hundred and eighty dollars."]
+        until: "Card issued"
+        highlight: ["Policy + risk + budget", "limit=$180.00"]
+        callout: ["Card limit = the exact approved amount", "single use, one merchant category"]
+      - say: ["Once it's charged, the card is cancelled, so a second charge fails."]
+        highlight: ["card now canceled", "card_canceled"]
+
+  - id: injection
+    xyz: what
+    kind: terminal
+    demo_scene: 3
+    chunks:
+      - say: ["Now an attack. The product page tells the model to order five, and it falls for it."]
+        until: "Model proposes"
+        highlight: ["Product page the agent reads", "Model proposes"]
+      - say: ["It doesn't matter. Code sees the five came from a web page, not the user, so a human reviews it, and no card is created."]
+        highlight: ["quantity=web", "untrusted_provenance:quantity", "none, ever"]
+        callout: ["{attacks_blocked} attack scenarios blocked", "the guardrail doesn't rely on the model resisting"]
+
+  - id: merchant
+    xyz: what
+    kind: terminal
+    demo_scene: 4
+    skip_until: "Card issued"     # the planning lines repeat scene 1; start at the card
+    chunks:
+      - say: ["On the merchant side, a twenty dollar charge on a fifteen dollar card is declined by Stripe itself."]
+        until: "spending_limit_exceeded"
+        highlight: ["limit=$15.00", "spending_limit_exceeded"]
+      - say: ["A look-alike merchant is declined by my real-time authorization check."]
+        highlight: ["TOTALLY NOT FIGMA LLC", "merchant_name_mismatch"]
+
+  # ── HOW ─────────────────────────────────────────────────────────────────────────────
+  - id: architecture
+    xyz: how
+    kind: diagram
+    chunks:
+      - say: ["The key decision: the model never holds a card or approves anything."]
+        highlight: [model]
+      - say: ["Code checks where each value came from, then policy, risk and budget, and the card is locked to the exact amount."]
+        highlight: [code, stripe]
+
+  - id: evals
+    xyz: how
+    kind: evals
+    chunks:
+      - say: ["An eval suite fails CI on any unsafe purchase, alongside {tests} tests."]
+        highlight: ["unsafe_purchases", "duplicate_charges", "adversarial_blocked"]
+        callout: ["{tests} tests · {scenarios} eval scenarios · CI-gated", "also ran end to end on real Stripe Issuing (test mode)"]
+      - say: ["A code review still found {review_bugs} bugs the evals missed, so I fixed each one with a regression test."]
+        highlight: ["unsafe_purchases", "duplicate_charges", "adversarial_blocked"]
+        callout: ["{review_bugs} bugs found in review, each with a regression test", "docs/WRITEUP.md"]
+
+  # ── CLOSE ───────────────────────────────────────────────────────────────────────────
+  - id: close
+    xyz: close
+    kind: outro
+    chunks:
+      - say:
+          - "I built a purchasing agent with zero unsafe purchases across {scenarios} scenarios, by letting the model only propose, while tested code and single-use cards decide."
