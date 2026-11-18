@@ -38,9 +38,9 @@ def test_zero_amount_request_is_declined(world):
 
 def test_handle_returns_exact_stripe_body_and_audits_reasons(world):
     r = world.service.submit(make_intent(20_000))
-    body = world.send("issuing_authorization.request", world.auth_request(r.card_id, 20_001))
-    assert body == {"approved": False}  # nothing else: Stripe validates the body against the API version
-    assert world.webhooks.last_decision == (False, ["amount_exceeds_intent"])
+    res = world.send_result("issuing_authorization.request", world.auth_request(r.card_id, 20_001))
+    assert res.body == {"approved": False}  # nothing else: Stripe validates the body against the API version
+    assert res.decision == (False, ["amount_exceeds_intent"])
     last = world.store.audit_log(r.intent_id)[-1]
     assert last["from_state"] == last["to_state"] == "card_issued"
     assert "amount_exceeds_intent" in last["reasons"]

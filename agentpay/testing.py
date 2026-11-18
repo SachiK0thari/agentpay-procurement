@@ -13,7 +13,7 @@ from agentpay.risk import RiskConfig
 from agentpay.service import ProcurementService
 from agentpay.store import Store, period_for
 from agentpay.stripe_gateway import FakeStripe
-from agentpay.webhooks import WebhookHandler, sign
+from agentpay.webhooks import WebhookHandler, WebhookResult, sign
 
 WEBHOOK_SECRET = "whsec_test"
 MCC = "computer_software_stores"
@@ -77,10 +77,13 @@ class World:
         return None if not b else b["limit_cents"] - b["spent_cents"] - b["reserved_cents"]
 
     def send(self, etype: str, obj: dict, event_id: str | None = None) -> dict:
+        return self.send_result(etype, obj, event_id).body
+
+    def send_result(self, etype: str, obj: dict, event_id: str | None = None) -> WebhookResult:
         self._n += 1
         payload = json.dumps({"id": event_id or f"evt_{self._n}", "type": etype,
                               "data": {"object": obj}}).encode()
-        return self.webhooks.handle(payload, sign(payload, WEBHOOK_SECRET, int(self.clock())))
+        return self.webhooks.process(payload, sign(payload, WEBHOOK_SECRET, int(self.clock())))
 
     @staticmethod
     def auth(card_id, amount, name="DELL TECHNOLOGIES", category=MCC, approved=True, currency="usd"):
@@ -99,7 +102,13 @@ class World:
 
     @staticmethod
     def txn(card_id, amount, txn_id="ipi_1"):
-        return {"id": txn_id, "card": card_id, "amount": -amount}
+        """A capture: negative amount (money leaving the platform)."""
+        return {"id": txn_id, "card": card_id, "amount": -amount, "type": "capture"}
+
+    @staticmethod
+    def refund(card_id, amount, txn_id="ipi_refund_1"):
+        """A refund: positive amount (money coming back)."""
+        return {"id": txn_id, "card": card_id, "amount": amount, "type": "refund"}
 
     def pay(self, card_id, amount):
         """Simulate the full happy-path webhook sequence (no merchant-side checks)."""
@@ -117,11 +126,11 @@ class World:
         if not ok:
             return False, f"card_controls:{why}"
         if realtime:
-            body = self.send("issuing_authorization.request",
-                             self.auth_request(card_id, amount, name=name, category=category, currency=currency),
-                             event_id=f"req:{card_id}:{amount}:{self._n}")
-            if not body["approved"]:
-                return False, "realtime_auth:" + ",".join(self.webhooks.last_decision[1])
+            res = self.send_result("issuing_authorization.request",
+                                   self.auth_request(card_id, amount, name=name, category=category, currency=currency),
+                                   event_id=f"req:{card_id}:{amount}:{self._n}")
+            if not res.body["approved"]:
+                return False, "realtime_auth:" + ",".join(res.decision[1])
         self.stripe.capture(card_id, amount)
         txn_id = txn_id or f"ipi_{card_id}_{self._n}"
         events = [("issuing_authorization.created", self.auth(card_id, amount, name=name, category=category, currency=currency)),

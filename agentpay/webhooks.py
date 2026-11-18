@@ -15,23 +15,40 @@ Real-time authorization contract (confirmed against Stripe docs, Oct 2026):
     partial approvals, only when `pending_request.is_amount_controllable`);
   * Stripe waits 2 seconds, then falls back to the account's timeout setting;
   * the separate /approve and /decline API calls are deprecated for this flow.
-`handle` returns exactly the body to send; the HTTP layer adds the header.
+`process` returns exactly the body to send (plus the decision, for logging); the HTTP layer
+adds the header. The real-time path fails closed: any error while deciding is a decline
+(`decision_error`), never an exception. An exception would become a 5xx, and Stripe would then
+apply the account's timeout fallback, which may be set to approve.
+
+Transactions: `capture` converts the reservation into spend; `refund` is ledgered as a negative
+amount and gives the money back to the budget; any other type is audited with no budget change.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import logging
 import re
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, Optional
 
 from .models import State
 from .store import Store
 from .stripe_gateway import StripeGateway
 
 
+log = logging.getLogger("agentpay.webhooks")
+
+
 class InvalidSignature(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class WebhookResult:
+    body: dict
+    decision: Optional[tuple[bool, list[str]]] = None  # set for real-time authorization requests
 
 
 def sign(payload: bytes, secret: str, ts: int) -> str:
@@ -86,30 +103,48 @@ class WebhookHandler:
         self.gateway = gateway
         self.secret = secret
         self.now = now
-        self.last_decision: tuple[bool, list[str]] | None = None  # for logging in the HTTP layer
 
     def handle(self, payload: bytes, sig_header: str) -> dict:
+        return self.process(payload, sig_header).body
+
+    def process(self, payload: bytes, sig_header: str) -> WebhookResult:
+        """Verify, then handle. The decision is returned rather than stored on the handler, so
+        concurrent requests can't log each other's decisions."""
         verify_signature(payload, sig_header, self.secret, self.now())
         event = json.loads(payload)
-        etype, obj = event["type"], event["data"]["object"]
+        etype = event.get("type") if isinstance(event, dict) else None
 
         if etype == "issuing_authorization.request":
-            approved, reasons = self.decide_authorization(obj)
-            self.last_decision = (approved, reasons)
-            rec = self.store.get_by_card(obj["card"]["id"])
-            if rec is not None:
-                self.store.note(rec.intent.intent_id,
-                                [f"auth_{'approved' if approved else 'declined'}:{obj.get('id', '?')}"] + reasons)
-            return {"approved": approved}  # exact body Stripe expects; header added by the app
+            approved, reasons = self._decide_safely(event)
+            return WebhookResult({"approved": approved}, (approved, reasons))  # exact body Stripe expects
 
+        obj = event["data"]["object"]
         if self.store.event_seen(event["id"]):
-            return {"status": "duplicate"}
+            return WebhookResult({"status": "duplicate"})
         if etype == "issuing_authorization.created":
             self._on_authorization(obj)
         elif etype == "issuing_transaction.created":
             self._on_transaction(obj)
         self.store.mark_event(event["id"])
-        return {"status": "ok"}
+        return WebhookResult({"status": "ok"})
+
+    def _decide_safely(self, event: dict) -> tuple[bool, list[str]]:
+        auth: dict = {}
+        try:
+            auth = event["data"]["object"]
+            approved, reasons = self.decide_authorization(auth)
+        except Exception:
+            log.exception("real-time authorization decision failed; declining")
+            approved, reasons = False, ["decision_error"]
+        try:
+            rec = self.store.get_by_card(auth["card"]["id"])
+            if rec is not None:
+                self.store.note(rec.intent.intent_id,
+                                [f"auth_{'approved' if approved else 'declined'}:{auth.get('id', '?')}"] + reasons)
+        except Exception:
+            # The audit note is best-effort; the decision must still reach Stripe in time.
+            log.exception("could not audit real-time decision for %s", auth.get("id", "?"))
+        return approved, reasons
 
     def decide_authorization(self, auth: dict) -> tuple[bool, list[str]]:
         rec = self.store.get_by_card(auth["card"]["id"])
@@ -119,9 +154,9 @@ class WebhookHandler:
         reasons = []
         if rec.state != State.CARD_ISSUED:
             reasons.append(f"card_not_active_for_state:{rec.state.value}")
-        if amount <= 0:
+        if not isinstance(amount, int) or amount <= 0:
             reasons.append("non_positive_amount")
-        if amount > rec.intent.amount:
+        elif amount > rec.intent.amount:
             reasons.append("amount_exceeds_intent")
         if currency != rec.intent.currency:
             reasons.append("currency_mismatch")
@@ -142,8 +177,25 @@ class WebhookHandler:
         if rec is None:
             return
         iid = rec.intent.intent_id
+        kind = txn.get("type")
+        if kind == "refund":
+            # Refunds are positive (money coming back to the platform).
+            recorded, credit = self.store.record_refund(iid, abs(txn["amount"]), ref=txn["id"])
+            if recorded:
+                reasons = [f"refund:{txn['id']}", f"budget_credited:{credit}"]
+                if credit < abs(txn["amount"]):
+                    reasons.append("refund_exceeds_capture")
+                self.store.note(iid, reasons)
+            return
+        if kind != "capture":
+            self.store.note(iid, [f"unhandled_transaction_type:{kind}:{txn.get('id', '?')}"])
+            return
         # Issuing transactions are negative for purchases (money leaving the platform).
-        self.store.record_capture(iid, abs(txn["amount"]), ref=txn["id"])
+        amount = abs(txn["amount"])
+        if self.store.record_capture(iid, amount, ref=txn["id"]) and amount > rec.intent.amount:
+            # A force capture can exceed what was authorized; it's real money, so count it,
+            # but make it visible.
+            self.store.note(iid, [f"over_capture:{amount}>{rec.intent.amount}"])
         self.store.advance(iid, State.CAPTURED)
         # Single-use: kill the card so it can never be charged again, then reconcile.
         # If cancel raises, we return 5xx to Stripe and its retry re-runs this handler:

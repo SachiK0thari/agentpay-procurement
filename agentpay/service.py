@@ -15,7 +15,7 @@ from .approvals import ApprovalSigner, InvalidApproval
 from .executor import Executor
 from .models import PurchaseIntent, RiskDecision, State
 from .store import Store
-from .stripe_gateway import TransientStripeError
+from .stripe_gateway import PermanentStripeError, TransientStripeError
 
 Notifier = Callable[[str, str, list[str]], None]  # (intent_id, approval_token, reasons)
 
@@ -49,6 +49,11 @@ class ProcurementService:
                  or self.store.vendor_known(intent.team, intent.vendor))
         self.store.create(intent)
         iid = intent.intent_id
+
+        # Before anything can reserve budget: a team nobody can approve for is refused outright,
+        # so no intent ever holds a reservation it has no way to release.
+        if intent.team not in self.approvers:
+            return self._reject_draft(iid, ["unknown_team"])
 
         pol = policy_mod.evaluate(intent, self.policy_cfg)
         if not pol.allowed:
@@ -117,8 +122,38 @@ class ProcurementService:
                 swept.append(iid)
         return swept
 
+    def redrive_approved(self, stuck_after_s: int = 5 * 60,
+                         idempotency_window_s: int = 23 * 3600) -> list[str]:
+        """Run on a schedule. An intent APPROVED with no card means we crashed between Stripe
+        creating the card and us saving it (or before calling Stripe at all). Its budget is
+        reserved, so it must not stay there.
+
+        Inside Stripe's 24h idempotency window, re-run issue_card: the key is derived from the
+        intent id, so Stripe hands back the card it already made and nothing is duplicated.
+        Past the window a retry could mint a second card, so fail the intent and release the
+        budget instead. A card created before the crash is orphaned but harmless: real-time
+        auth declines it (`unknown_card`).
+        """
+        done = []
+        now = self.now()
+        for rec in self.store.stale_approved_without_card(older_than=now - stuck_after_s):
+            iid = rec.intent.intent_id
+            if now - rec.updated_at > idempotency_window_s:
+                if self.store.transition(iid, State.FAILED, ["card_issue_unrecoverable"]):
+                    self.store.release(iid)
+                    done.append(iid)
+                continue
+            try:
+                self.executor.issue_card(iid)
+            except (TransientStripeError, PermanentStripeError):
+                pass  # issue_card already failed the intent and released its budget
+            done.append(iid)
+        return done
+
     def housekeeping(self, card_max_age_s: int = 48 * 3600) -> dict[str, list[str]]:
-        return {"expired_approvals": self.expire_stale(), "swept_cards": self.sweep_unused_cards(card_max_age_s)}
+        return {"expired_approvals": self.expire_stale(),
+                "swept_cards": self.sweep_unused_cards(card_max_age_s),
+                "redriven_approvals": self.redrive_approved()}
 
     # ---------- internals ----------
     def _claim(self, token: str, approver_id: str):

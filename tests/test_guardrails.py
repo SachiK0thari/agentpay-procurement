@@ -1,4 +1,5 @@
 """One test group per guardrail. Each tries to defeat a layer on its own."""
+import base64
 import threading
 
 import pytest
@@ -211,7 +212,9 @@ def test_wrong_or_self_approval_refused(world):
     r = world.service.submit(make_intent(60_000))
     with pytest.raises(InvalidApproval, match="wrong_approver"):
         world.service.approve(r.approval_token, "alice")
-    tampered = r.approval_token.replace(".bob.", ".alice.")
+    b64 = lambda v: base64.urlsafe_b64encode(v.encode()).rstrip(b"=").decode()  # noqa: E731
+    assert f".{b64('bob')}." in r.approval_token
+    tampered = r.approval_token.replace(f".{b64('bob')}.", f".{b64('alice')}.")
     with pytest.raises(InvalidApproval, match="bad_signature"):
         world.service.approve(tampered, "alice")
 

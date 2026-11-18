@@ -15,13 +15,15 @@ from agentpay.webhooks import sign
 from agentpay.testing import WEBHOOK_SECRET, World, make_intent
 
 STRIPE_VERSION = "2025-09-30.clover"
+HOUSEKEEPING_TOKEN = "hk-secret"
 
 
 @pytest.fixture
 def api(world):
     session = SessionAuth(b"session-secret-0123456789", ttl_s=3600)
     app = create_app(world.service, world.webhooks, world.store, session, stripe_version=STRIPE_VERSION,
-                     now=world.clock, session_issuer=session, dev_login=True, base_url="http://t")
+                     user_teams={"*": "it"}, now=world.clock, session_issuer=session, dev_login=True,
+                     base_url="http://t", housekeeping_token=HOUSEKEEPING_TOKEN)
     client = TestClient(app)
     client.world, client.session = world, session
     return client
@@ -66,7 +68,7 @@ def test_endpoints_require_a_session(api):
     assert api.post(f"/approvals/{r.approval_token}/approve?approver_id=bob").status_code == 401  # the old hole
     assert api.get(f"/approvals/{r.approval_token}").status_code == 401
     assert api.get(f"/intents/{r.intent_id}").status_code == 401
-    assert api.post("/tasks/housekeeping").status_code == 401
+    assert api.post("/tasks/housekeeping").status_code == 403  # scheduler token, not a session
 
 
 def test_approver_identity_comes_from_session_not_request(api):
@@ -117,13 +119,13 @@ def test_dev_login_sets_cookie_and_submit_uses_session_identity(api):
 
 def test_dev_login_absent_unless_enabled(world):
     session = SessionAuth(b"session-secret-0123456789")
-    app = create_app(world.service, world.webhooks, world.store, session, stripe_version="v")
+    app = create_app(world.service, world.webhooks, world.store, session, stripe_version="v", user_teams={})
     assert TestClient(app).post("/auth/dev-login", json={"approver_id": "bob"}).status_code in (404, 405)
 
 
 def test_housekeeping_endpoint(api):
     r = api.world.service.submit(make_intent(20_000))
     api.world.clock.advance(72 * 3600)
-    out = login(api, "ops").post("/tasks/housekeeping").json()
+    out = api.post("/tasks/housekeeping", headers={"X-Housekeeping-Token": HOUSEKEEPING_TOKEN}).json()
     assert out["swept_cards"] == [r.intent_id]
     assert api.get("/healthz").json() == {"ok": True}

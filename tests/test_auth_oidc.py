@@ -184,7 +184,8 @@ def test_approval_over_http_with_idp_token(world):
     from agentpay.testing import make_intent
 
     a = auth()
-    app = create_app(world.service, world.webhooks, world.store, a, stripe_version="v", now=world.clock)
+    app = create_app(world.service, world.webhooks, world.store, a, stripe_version="v", now=world.clock,
+                     user_teams={"*": "it"})
     c = TestClient(app)
     assert c.post("/auth/dev-login", json={"approver_id": "bob"}).status_code in (404, 405)
     r = world.service.submit(make_intent(60_000))
@@ -195,6 +196,33 @@ def test_approval_over_http_with_idp_token(world):
     assert c.post(f"/approvals/{r.approval_token}/approve", headers=forged).status_code == 401
     resp = c.post(f"/approvals/{r.approval_token}/approve", headers=as_("bob"))
     assert resp.status_code == 200 and resp.json()["decided_by"] == "bob" and resp.json()["state"] == "card_issued"
+
+
+def test_email_approver_ids_work_end_to_end():
+    """Review bug #3: approval tokens split on '.', so an email approver id (the recommended
+    OIDC_SUBJECT_CLAIM=email setup) could never approve anything."""
+    pytest.importorskip("fastapi")
+    from fastapi.testclient import TestClient
+
+    from agentpay.app import create_app
+    from agentpay.testing import World, make_intent
+
+    world = World()
+    world.service.approvers["it"] = "bob.smith@corp.com"
+    a = auth(subject_claim="email")
+    app = create_app(world.service, world.webhooks, world.store, a, stripe_version="v", now=world.clock,
+                     user_teams={"alice.jones@corp.com": "it"})
+    c = TestClient(app)
+    now = int(world.clock())
+    as_ = lambda email: {"Authorization": "Bearer " + token(email=email, iat=now, exp=now + 600)}  # noqa: E731
+    body = make_intent(60_000).to_dict()
+    sub = c.post("/intents", json=body, headers=as_("alice.jones@corp.com")).json()
+    assert sub["state"] == "pending_approval"
+    tok = sub["approval_url"].rsplit("/", 1)[-1]
+    assert c.get(f"/approvals/{tok}", headers=as_("bob.smith@corp.com")).status_code == 200
+    resp = c.post(f"/approvals/{tok}/approve", headers=as_("bob.smith@corp.com"))
+    assert resp.status_code == 200 and resp.json()["state"] == "card_issued"
+    assert resp.json()["decided_by"] == "bob.smith@corp.com"
 
 
 def test_auth_from_env():

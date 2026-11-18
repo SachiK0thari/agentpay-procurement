@@ -7,6 +7,7 @@ LiveStripe targets Stripe Issuing in TEST MODE. Verified against stripe-python 1
 """
 from __future__ import annotations
 
+import threading
 from typing import Optional, Protocol
 
 from .config import redact
@@ -44,8 +45,14 @@ class FakeStripe:
         self.lose_next_response = 0  # do the work, then raise (response lost in transit)
         self.cancel_fail_next = 0    # cancel_card raises (card stays active)
         self.reject_next = 0         # create_card raises a 4xx (e.g. invalid API key)
+        self._lock = threading.Lock()  # the HTTP concurrency test calls it from many threads
 
     def create_card(self, *, intent_id, amount, currency, mcc, idempotency_key) -> str:
+        with self._lock:
+            return self._create_card(intent_id=intent_id, amount=amount, currency=currency, mcc=mcc,
+                                     idempotency_key=idempotency_key)
+
+    def _create_card(self, *, intent_id, amount, currency, mcc, idempotency_key) -> str:
         self.calls.append(("create_card", idempotency_key))
         if self.reject_next:
             self.reject_next -= 1

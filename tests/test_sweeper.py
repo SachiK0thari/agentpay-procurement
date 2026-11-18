@@ -52,5 +52,6 @@ def test_housekeeping_runs_both_jobs(world):
     issued = world.service.submit(make_intent(20_000, user="dana"))
     world.clock.advance(72 * 3600)
     out = world.service.housekeeping()
-    assert out == {"expired_approvals": [pending.intent_id], "swept_cards": [issued.intent_id]}
+    assert out == {"expired_approvals": [pending.intent_id], "swept_cards": [issued.intent_id],
+                   "redriven_approvals": []}
     assert world.store.budget("it", period_for(world.clock()))["reserved_cents"] == 0
