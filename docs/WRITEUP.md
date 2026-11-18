@@ -113,7 +113,7 @@ wide open. The suite now also covers the HTTP layer, concurrency and the full pa
   and times no longer count as quantities, and a request form's quantity field overrides the
   text. Phrasings the rules don't anticipate still fall to human review rather than through.
 - **Not production infrastructure.** It uses SQLite and has no scheduler for
-  the expiry and card-sweep job. DESIGN.md §8 lists what production would add.
+  the expiry and card-sweep job. DESIGN.md §9 lists what production would add.
 
 ## Try it
 

@@ -111,7 +111,45 @@ signs with the secret of whichever account the CLI is logged in to; a mismatch s
 
 ## 8. What I got wrong
 
-<!-- TODO: write this yourself. -->
+**I trusted a green eval board too early.** With 82 scenarios and 128 tests at 0 unsafe
+purchases, I treated the system as done. A code review then found eight real bugs: email
+approvers could never approve, any signed-in user could read any intent or spend any team's
+budget, one SQLite connection was shared across FastAPI's threadpool (99 errors in 400
+concurrent submits), and refunds were counted as spend. The evals missed all of them for one
+reason: they drove the service layer directly, on one thread, with captures only. My mistake
+was measuring the core and reporting the result as if it covered the whole system. Each bug now
+has a regression test, and the suite exercises the HTTP layer, concurrency and refunds
+(`docs/WRITEUP.md`, "Bugs found in review").
+
+**My fakes agreed with my assumptions.** `FakeStripe` behaved the way I believed Stripe
+behaves, so it couldn't tell me where I was wrong. The first test-mode run against real Stripe
+found four bugs in an afternoon: budgets were never seeded on startup, so every live order was
+rejected; a permanent Stripe error left an order approved with its budget reserved forever;
+parts of Stripe keys and approval tokens reached the logs; and newer accounts need a financial
+account on each card. I should have gone to the real API in the first week, not after the
+design felt finished.
+
+**I wrote a security check that only looked safe.** The real-time merchant-name check was a
+substring match, so "TOTALLY NOT FIGMA LLC" was approved for a Figma order. Every test merchant
+was either exactly right or obviously wrong, so nothing caught it. I found it while building
+the demo, when I tried a look-alike name on purpose. It now requires the descriptor to start
+with the vendor's name as whole words, which false-blocks "SQ *FIGMA". That's the trade I
+want, because a false block costs a retry and a bad approval costs money.
+
+**I checked that values existed, not that they belonged together.** Quantities were checked
+against the set of numbers the user stated, so "3 docks and 5 cables" proposed as 5 docks and 3
+cables passed as user-sourced. Each number was real; the pairing was wrong. Quantities are now
+bound to the item they were stated next to.
+
+**I shipped a placeholder for identity.** The first approval endpoint took `?approver_id=` as a
+query parameter, which meant anyone could claim to be the approver. The signed token was solid,
+but it only proves *who may* approve; the HTTP layer has to prove *who is calling*. Identity
+now comes from an authenticated session or the IdP's token, never from the request.
+
+The common thread: each guardrail was correct where I tested it and wrong at the edges I didn't
+think to test. What I'd do differently is attack the boundaries (HTTP, threads, the real API,
+adversarial names) as early as the core logic, and treat "0 unsafe" as a claim about what the
+suite reaches, not about the system.
 
 ## 9. Production would add
 
