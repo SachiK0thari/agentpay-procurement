@@ -13,9 +13,9 @@ new hires"; the agent plans the order, and **deterministic code** decides whethe
 <sub>Real output, not a mockup.</sub>
 
 <details>
-<summary><b>▶ Watch the 3-minute narrated demo</b> (<a href="docs/demo.srt">captions</a>)</summary>
+<summary><b>▶ Watch the 2-minute narrated demo</b> (<a href="docs/demo.srt">captions</a>)</summary>
 
-https://github.com/user-attachments/assets/680654bb-071e-4e58-93d8-b52db306c33b
+https://github.com/user-attachments/assets/be24a4c0-dd8d-4f1c-a871-07863f29b8e4
 
 </details>
 
