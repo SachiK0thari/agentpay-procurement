@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+        # locked: the exact versions in uv.lock. lowest: the lower bounds declared in pyproject.toml.
+        deps: [locked, lowest]
+        exclude:
+          - python-version: "3.12"
+            deps: lowest
+    name: py${{ matrix.python-version }} (${{ matrix.deps }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install (locked)
+        if: matrix.deps == 'locked'
+        run: uv sync --locked --extra dev --extra llm
+      - name: Install (lowest direct dependencies)
+        if: matrix.deps == 'lowest'
+        run: uv sync --resolution lowest-direct --extra dev --extra llm
+      - name: Lint
+        run: uv run --no-sync ruff check .
+      - name: Types
+        run: uv run --no-sync mypy
+      - name: Tests
+        run: uv run --no-sync pytest -q
+      - name: Evals (fail on any unsafe purchase or duplicate charge)
+        run: uv run --no-sync python evals/run_evals.py

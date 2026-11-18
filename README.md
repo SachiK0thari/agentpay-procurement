@@ -1,5 +1,7 @@
 # agentpay — a procurement agent that can't overspend
 
+[![CI](https://github.com/SachiK0thari/agentpay-procurement/actions/workflows/ci.yml/badge.svg)](https://github.com/SachiK0thari/agentpay-procurement/actions/workflows/ci.yml)
+
 A B2B purchasing agent built on Stripe Issuing. A teammate asks for "3 more USB-C docks for the
 new hires"; the agent plans the order, and **deterministic code** decides whether money moves.
 
@@ -149,7 +151,7 @@ Keys live in a `.env` file in the project root (gitignored). Copy the template a
 
 ```bash
 pip install -e ".[server,llm]"
-cp .env.example .env            # then edit: Stripe test key, cardholder, webhook secret, two signing secrets
+cp .env.example .env            # then edit: Stripe test key, cardholder, webhook secret, two signing secrets, USER_TEAMS
 uvicorn agentpay.app:app --reload
 stripe listen --events issuing_authorization.request,issuing_authorization.created,issuing_transaction.created \
     --forward-to localhost:8000/webhooks/stripe
@@ -174,12 +176,14 @@ precedence, and `AGENTPAY_ENV_FILE` points at a different file. `LiveStripe` ref
 isn't `sk_test_` / `rk_test_`. `AGENTPAY_DEV_LOGIN=1` exposes
 `POST /auth/dev-login` which mints a session for any name — development only. Approvers open
 `/approvals/<token>` signed in; the page shows what, who, how much and why it needs them, with
-Approve / Reject buttons. Run `POST /tasks/housekeeping` from a scheduler (expires stale
-approvals, sweeps unused cards).
+Approve / Reject buttons. Run `POST /tasks/housekeeping` from a scheduler with
+`X-Housekeeping-Token: $HOUSEKEEPING_TOKEN` (expires stale approvals, sweeps unused cards, finishes
+intents stuck in `APPROVED` after a crash).
 
 Optional env: `BASE_URL`, `STRIPE_API_VERSION` (the `Stripe-Version` header on real-time
 responses; defaults to the installed stripe-python's), `VENDORS` (`Dell=mcc1|mcc2;Figma=mcc`),
-`TRUSTED_VENDORS`, `IT_APPROVER`, `AGENTPAY_DB`, `STRIPE_FINANCIAL_ACCOUNT` (`fa_…`, needed on
+`TRUSTED_VENDORS`, `APPROVERS` (`it=alice;eng=bob@corp.com`; every budgeted team needs one,
+`IT_APPROVER` still works for `it`), `HOUSEKEEPING_TOKEN`, `AGENTPAY_DB`, `STRIPE_FINANCIAL_ACCOUNT` (`fa_…`, needed on
 accounts using Stripe's v2 money management), `BUDGETS` (monthly limits in cents,
 `it=500000;eng=200000`; default `it=500000`, seeded for this month and next on startup).
 
