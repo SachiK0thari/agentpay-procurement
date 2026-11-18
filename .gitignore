@@ -10,3 +10,6 @@ __pycache__/
 .DS_Store
 miscellaneous
 
+
+# Demo video: hosted on GitHub user-attachments (see README), not in the repo
+docs/demo.mp4
