@@ -1,7 +1,7 @@
-"""Render the narrated demo video (docs/demo.mp4) from docs/demo_video.yaml.
+"""Render the narrated demo video (docs/agentpay-procurment-demo.mp4) from docs/demo_video.yaml.
 
     pip install pillow imageio-ffmpeg pyyaml      # only needed for this script
-    python scripts/make_demo_video.py [--out docs/demo.mp4] [--voice "Ava (Premium)"] [--rate 178]
+    python scripts/make_demo_video.py [--out docs/agentpay-procurment-demo.mp4] [--voice "Ava (Premium)"] [--rate 178]
 
 The script file holds the scenes (tagged why / what / how / close), the narration, on-screen
 callouts and the outro card. Terminal scenes are the real output of scripts/local_demo.py and
@@ -493,7 +493,7 @@ def ffmpeg_exe() -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--script", default=str(ROOT / "docs" / "demo_video.yaml"))
-    ap.add_argument("--out", default=str(ROOT / "docs" / "demo.mp4"))
+    ap.add_argument("--out", default=str(ROOT / "docs" / "agentpay-procurment-demo.mp4"))
     ap.add_argument("--tts", choices=["eleven", "say"], default="eleven",
                     help="voice engine (default: ElevenLabs, needs ELEVENLABS_API_KEY/ELEVENLABS_VOICE_ID)")
     ap.add_argument("--voice", help="ElevenLabs voice id, or macOS voice with --tts say")

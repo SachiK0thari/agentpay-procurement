@@ -1,7 +1,7 @@
-"""Render docs/demo.gif from the real output of scripts/local_demo.py.
+"""Render docs/agentpay-procurment-demo.gif from the real output of scripts/local_demo.py.
 
     pip install pillow            # only needed for this script
-    python scripts/make_demo_gif.py [--out docs/demo.gif]
+    python scripts/make_demo_gif.py [--out docs/agentpay-procurment-demo.gif]
 
 No screen recorder needed: it runs the demo, keeps its ANSI colours, and draws each scene as a
 terminal window that fills in line by line. Re-run it whenever the demo output changes.
@@ -112,7 +112,7 @@ def run_demo() -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(ROOT / "docs" / "demo.gif"))
+    ap.add_argument("--out", default=str(ROOT / "docs" / "agentpay-procurment-demo.gif"))
     args = ap.parse_args()
 
     raw = run_demo()

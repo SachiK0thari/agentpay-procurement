@@ -8,12 +8,12 @@ new hires"; the agent plans the order, and **deterministic code** decides whethe
 > **The model proposes. Code decides.** The LLM never holds a payment credential and never
 > decides whether a purchase is allowed.
 
-![agentpay demo: a within-policy purchase, a human approval, a blocked prompt injection, and declined merchant attacks](docs/demo.gif)
+![agentpay demo: a within-policy purchase, a human approval, a blocked prompt injection, and declined merchant attacks](docs/agentpay-procurment-demo.gif)
 
 <sub>Real output, not a mockup.</sub>
 
 <details>
-<summary><b>▶ Watch the 2-minute narrated demo</b> (<a href="docs/demo.srt">captions</a>)</summary>
+<summary><b>▶ Watch the 2-minute narrated demo</b> (<a href="docs/agentpay-procurment-demo.srt">captions</a>)</summary>
 
 https://github.com/user-attachments/assets/0a7a81c3-9d0e-4ef9-95bd-e6e4bd5055ba
 
@@ -129,7 +129,7 @@ Sweeper: a card unused for 48h is cancelled, the intent EXPIRED, the budget rele
 | `agentpay/testing.py` | `World` (everything on fakes), `FakeLLM` (scripted model), merchant `checkout`. |
 | `scripts/testmode_demo.py` | One real purchase against Stripe test mode, via the API + Issuing test helpers. Ran end to end on 2026-11-15 (see DESIGN.md §6). Needs Issuing enabled on the account. |
 | `scripts/local_demo.py` | The demo-video walkthrough (happy path, approval, injection, overcharge / look-alike merchant) against FakeStripe + a scripted model. No account or network. |
-| `scripts/make_demo_gif.py`, `docs/demo.gif` | Renders the README GIF from the real demo output (needs `pip install pillow`). |
+| `scripts/make_demo_gif.py`, `docs/agentpay-procurment-demo.gif` | Renders the README GIF from the real demo output (needs `pip install pillow`). |
 | `scripts/make_demo_video.py`, `docs/demo_video.yaml` | Renders the narrated demo video from a YAML script; metrics are filled from a live eval run (see `docs/DEMO_SCRIPT.md`). |
 | `docs/WRITEUP.md`, `docs/DEMO_SCRIPT.md` | Project write-up (results, what live testing found, limitations) and how the demo video is made. |
 | `tests/` | 167 tests (1 needs the `llm` extra): one group per guardrail, each attacked on its own. |

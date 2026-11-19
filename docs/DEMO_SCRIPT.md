@@ -2,7 +2,7 @@
 
 The narrated demo (about 1¾ minutes) is rendered, not screen-recorded. The script lives in
 [`demo_video.yaml`](demo_video.yaml); [`scripts/make_demo_video.py`](../scripts/make_demo_video.py)
-turns it into `docs/demo.mp4` plus burned-in captions and [`demo.srt`](demo.srt).
+turns it into `docs/agentpay-procurment-demo.mp4` plus burned-in captions and [`agentpay-procurment-demo.srt`](agentpay-procurment-demo.srt).
 
 ```bash
 pip install pillow imageio-ffmpeg pyyaml
@@ -32,4 +32,4 @@ its part of the XYZ formula: accomplished X, measured by Y, by doing Z.
 - The renderer refuses to run while any `[[PLACEHOLDER]]` remains or a `{name}` is unknown.
 - ElevenLabs clips are cached by text under `.cache/tts/`, so re-renders only pay for changed
   sentences.
-- `docs/demo.mp4` is gitignored; the README plays the copy hosted on GitHub.
+- `docs/agentpay-procurment-demo.mp4` is gitignored; the README plays the copy hosted on GitHub.
