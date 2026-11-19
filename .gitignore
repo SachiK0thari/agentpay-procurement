@@ -12,7 +12,8 @@ miscellaneous
 
 
 # Demo video: hosted on GitHub user-attachments (see README), not in the repo
-docs/demo.mp4
+docs/agentpay-procurment-demo.mp4
 
 # TTS clip cache for scripts/make_demo_video.py
 .cache/
+docs/*.mp4
