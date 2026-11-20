@@ -12,12 +12,7 @@ new hires"; the agent plans the order, and **deterministic code** decides whethe
 
 <sub>Real output, not a mockup.</sub>
 
-<details>
-<summary><b>▶ Watch the 2-minute narrated demo</b> (<a href="docs/agentpay-procurment-demo.srt">captions</a>)</summary>
-
-https://github.com/user-attachments/assets/0a7a81c3-9d0e-4ef9-95bd-e6e4bd5055ba
-
-</details>
+**[▶ Watch the 2-minute narrated demo on YouTube](https://youtu.be/qzPYPgw6SV0)**
 
 ## Results (current eval suite)
 
@@ -130,8 +125,7 @@ Sweeper: a card unused for 48h is cancelled, the intent EXPIRED, the budget rele
 | `scripts/testmode_demo.py` | One real purchase against Stripe test mode, via the API + Issuing test helpers. Ran end to end on 2026-11-15 (see DESIGN.md §6). Needs Issuing enabled on the account. |
 | `scripts/local_demo.py` | The demo-video walkthrough (happy path, approval, injection, overcharge / look-alike merchant) against FakeStripe + a scripted model. No account or network. |
 | `scripts/make_demo_gif.py`, `docs/agentpay-procurment-demo.gif` | Renders the README GIF from the real demo output (needs `pip install pillow`). |
-| `scripts/make_demo_video.py`, `docs/demo_video.yaml` | Renders the narrated demo video from a YAML script; metrics are filled from a live eval run (see `docs/DEMO_SCRIPT.md`). |
-| `docs/WRITEUP.md`, `docs/DEMO_SCRIPT.md` | Project write-up (results, what live testing found, limitations) and how the demo video is made. |
+| `docs/WRITEUP.md` | Project write-up (results, what live testing found, limitations). |
 | `tests/` | 167 tests (1 needs the `llm` extra): one group per guardrail, each attacked on its own. |
 | `evals/` | 88 scenarios + runner (`--json`, `--markdown`, `--live-planner`). |
 | `DESIGN.md` | Decisions, trade-offs, threat model, build plan, open items. |

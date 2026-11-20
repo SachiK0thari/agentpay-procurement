@@ -11,9 +11,9 @@ __pycache__/
 miscellaneous
 
 
-# Demo video: hosted on GitHub user-attachments (see README), not in the repo
+# Demo video: hosted on YouTube (see README), not in the repo
 docs/agentpay-procurment-demo.mp4
 
-# TTS clip cache for scripts/make_demo_video.py
+# TTS clip cache for miscellaneous/make_demo_video.py
 .cache/
 docs/*.mp4
